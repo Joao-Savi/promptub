@@ -84,7 +84,13 @@ fn mpv_windows_paths() -> Vec<String> {
 }
 
 pub fn mpv_cmd(program: &str) -> Command {
-    hidden_cmd(program)
+    let mut cmd = hidden_cmd(program);
+    if let Some(dir) = Path::new(program).parent() {
+        if dir.is_dir() {
+            cmd.current_dir(dir);
+        }
+    }
+    cmd
 }
 
 pub fn utf8_cmd(program: &str) -> Command {

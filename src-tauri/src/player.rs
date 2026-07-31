@@ -227,7 +227,6 @@ impl Player {
                 args.push(format!("--geometry={w}x{h}+{x}+{y}"));
                 args.push("--border=no".to_string());
                 args.push("--ontop".to_string());
-                args.push("--focus-on-open=no".to_string());
                 args.push("--title=promptub stream".to_string());
             }
         }

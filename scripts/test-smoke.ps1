@@ -28,6 +28,17 @@ $mpv = Join-Path $toolsDir "mpv.exe"
 Assert (Test-Path $ytdlp) "yt-dlp bundlado"
 Assert (Test-Path $mpv) "mpv bundlado"
 
+if (Test-Path $mpv) {
+    $wd = Split-Path $mpv
+    $mpvProc = Start-Process -FilePath $mpv -WorkingDirectory $wd -ArgumentList @(
+        "--idle=yes", "--force-window=yes", "--geometry=640x360+100+100", "--border=no", "--ontop"
+    ) -PassThru
+    Start-Sleep -Seconds 2
+    $mpvProc.Refresh()
+    Assert (-not $mpvProc.HasExited) "mpv inicia em modo video"
+    Stop-Process -Id $mpvProc.Id -Force -ErrorAction SilentlyContinue
+}
+
 Get-Process promptub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 400
 
