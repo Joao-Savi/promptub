@@ -1,7 +1,6 @@
 use crate::player::Player;
 use crate::queue::Queue;
 use crate::stream::StreamCache;
-use crate::video_embed::VideoOverlay;
 use crate::youtube::Video;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -16,7 +15,6 @@ pub struct AppState {
     pub last_music_video: Mutex<Option<Video>>,
     pub last_watch_video: Mutex<Option<Video>>,
     pub stream_cache: StreamCache,
-    pub video_overlay: Mutex<VideoOverlay>,
 }
 
 impl AppState {
@@ -31,7 +29,6 @@ impl AppState {
             last_music_video: Mutex::new(None),
             last_watch_video: Mutex::new(None),
             stream_cache: StreamCache::new(),
-            video_overlay: Mutex::new(VideoOverlay::new()),
         }
     }
 

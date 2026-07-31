@@ -12,11 +12,17 @@ const FORMAT_AUDIO: &str = "bestaudio[ext=m4a]/bestaudio/best";
 const FORMAT_VIDEO: &str =
     "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/b[height<=720]/best";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MpvWindow {
+    Audio,
+    Video { x: i32, y: i32, w: i32, h: i32 },
+}
+
 pub struct Player {
     child: Option<Child>,
     cookies_path: String,
     pipe_name: String,
-    embed_hwnd: Option<isize>,
+    mpv_window: MpvWindow,
 }
 
 impl Player {
@@ -25,7 +31,7 @@ impl Player {
             child: None,
             cookies_path: String::new(),
             pipe_name: format!("promptub-{}", std::process::id()),
-            embed_hwnd: None,
+            mpv_window: MpvWindow::Audio,
         }
     }
 
@@ -40,16 +46,24 @@ impl Player {
         }
     }
 
-    pub fn set_embed_hwnd(&mut self, hwnd: Option<isize>) {
-        let changed = self.embed_hwnd != hwnd;
-        self.embed_hwnd = hwnd;
-        if !self.daemon_responding() {
+    pub fn set_video_area(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        let next = MpvWindow::Video { x, y, w, h };
+        if self.mpv_window == next {
             return;
         }
-        if changed {
+        self.mpv_window = next;
+        if self.daemon_responding() {
             let _ = self.restart();
-        } else {
-            let _ = self.apply_embed_wid(hwnd);
+        }
+    }
+
+    pub fn clear_video_area(&mut self) {
+        if self.mpv_window == MpvWindow::Audio {
+            return;
+        }
+        self.mpv_window = MpvWindow::Audio;
+        if self.daemon_responding() {
+            let _ = self.restart();
         }
     }
 
@@ -63,22 +77,30 @@ impl Player {
         audio_only: bool,
         direct_url: Option<&str>,
     ) -> Result<(), String> {
+        if audio_only {
+            if self.mpv_window != MpvWindow::Audio {
+                self.mpv_window = MpvWindow::Audio;
+                self.restart()?;
+            }
+        } else if !matches!(self.mpv_window, MpvWindow::Video { .. }) {
+            return Err("painel de video nao sincronizado — tente novamente".into());
+        }
+
         self.ensure_daemon()?;
 
         if audio_only {
-            let _ = self.apply_embed_wid(None);
             ipc_property(&self.pipe_name, "force-window", json!(false))?;
             ipc_property(&self.pipe_name, "video", json!(false))?;
-        } else if let Some(wid) = self.embed_hwnd.filter(|w| *w != 0) {
-            self.apply_embed_wid(Some(wid))?;
-            ipc_property(&self.pipe_name, "force-window", json!(false))?;
-            ipc_property(&self.pipe_name, "video", json!(true))?;
-            ipc_property(&self.pipe_name, "vo", json!("gpu"))?;
-            ipc_property(&self.pipe_name, "hwdec", json!("auto-safe"))?;
         } else {
-            ipc_property(&self.pipe_name, "wid", json!(0))?;
             ipc_property(&self.pipe_name, "force-window", json!(true))?;
             ipc_property(&self.pipe_name, "video", json!(true))?;
+            if let MpvWindow::Video { x, y, w, h } = self.mpv_window {
+                let _ = ipc_property(
+                    &self.pipe_name,
+                    "geometry",
+                    json!(format!("{w}x{h}+{x}+{y}")),
+                );
+            }
         }
 
         let ytdl_raw = if audio_only {
@@ -92,7 +114,6 @@ impl Player {
             ipc_property(&self.pipe_name, "ytdl", json!(false))?;
             if ipc_loadfile(&self.pipe_name, url).is_err() {
                 self.restart()?;
-                self.apply_embed_wid(self.embed_hwnd)?;
                 ipc_property(&self.pipe_name, "ytdl", json!(false))?;
                 ipc_loadfile(&self.pipe_name, url)?;
             }
@@ -112,7 +133,6 @@ impl Player {
                     }
                 }
                 self.restart()?;
-                self.apply_embed_wid(self.embed_hwnd)?;
                 ipc_property(&self.pipe_name, "ytdl", json!(true))?;
                 ipc_property(&self.pipe_name, "ytdl-format", json!(format))?;
                 ipc_property(&self.pipe_name, "ytdl-raw-options", json!(ytdl_raw))?;
@@ -131,11 +151,6 @@ impl Player {
             raw.push_str(&format!(",cookies={path}"));
         }
         raw
-    }
-
-    fn apply_embed_wid(&mut self, hwnd: Option<isize>) -> Result<(), String> {
-        let wid = hwnd.unwrap_or(0);
-        ipc_property(&self.pipe_name, "wid", json!(wid))
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
@@ -198,17 +213,23 @@ impl Player {
             format!("--ytdl-raw-options={ytdl_raw}"),
             "--no-terminal".to_string(),
             "--really-quiet".to_string(),
-            "--force-window=no".to_string(),
             "--cache=yes".to_string(),
             "--demuxer-readahead-secs=5".to_string(),
             "--prefetch-playlist=yes".to_string(),
         ];
 
-        if let Some(wid) = self.embed_hwnd.filter(|w| *w != 0) {
-            args.push(format!("--wid={wid}"));
-            args.push("--no-border".to_string());
-            args.push("--vo=gpu".to_string());
-            args.push("--hwdec=auto-safe".to_string());
+        match self.mpv_window {
+            MpvWindow::Audio => {
+                args.push("--force-window=no".to_string());
+            }
+            MpvWindow::Video { x, y, w, h } => {
+                args.push("--force-window=yes".to_string());
+                args.push(format!("--geometry={w}x{h}+{x}+{y}"));
+                args.push("--border=no".to_string());
+                args.push("--ontop".to_string());
+                args.push("--focus-on-open=no".to_string());
+                args.push("--title=promptub stream".to_string());
+            }
         }
 
         let child = mpv_cmd(&mpv)
@@ -223,7 +244,6 @@ impl Player {
             }
             if ipc_cmd(&self.pipe_name, &["get_property", "idle-active"]).is_ok() {
                 let _ = ipc_property(&self.pipe_name, "focus-on-open", json!(false));
-                let _ = self.apply_embed_wid(self.embed_hwnd);
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(if i < 30 { 100 } else { 50 }));
@@ -280,7 +300,6 @@ fn kill_process_tree(child: &mut Child) {
 }
 
 pub fn shutdown_player(state: &SharedState) {
-    state.video_overlay.lock().destroy();
     state.player.lock().shutdown();
 }
 
@@ -436,24 +455,21 @@ pub fn sync_video_panel(
     height: f64,
 ) -> Result<(), String> {
     let sf = window.scale_factor().map_err(|e| e.to_string())?;
-    let parent = crate::video_embed::hwnd_from_window(&window)?;
-    let hwnd = state.video_overlay.lock().sync(
-        parent,
+    let owner = crate::video_embed::hwnd_from_window(&window)?;
+    let (sx, sy, w, h) = crate::video_embed::screen_rect(
+        owner,
         (x * sf).round() as i32,
         (y * sf).round() as i32,
         (width * sf).round() as i32,
         (height * sf).round() as i32,
     );
-    if hwnd != 0 {
-        state.player.lock().set_embed_hwnd(Some(hwnd));
-    }
+    state.player.lock().set_video_area(sx, sy, w, h);
     Ok(())
 }
 
 #[tauri::command]
 pub fn hide_video_panel(state: tauri::State<'_, SharedState>) -> Result<(), String> {
-    state.video_overlay.lock().hide();
-    state.player.lock().set_embed_hwnd(None);
+    state.player.lock().clear_video_area();
     Ok(())
 }
 

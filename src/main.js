@@ -363,6 +363,11 @@ async function removeFromQueue(index) {
 
 async function playFromQueue(index) {
   try {
+    if (!isAudioOnly()) {
+      panelVideo?.classList.remove("hidden");
+      await new Promise((r) => requestAnimationFrame(r));
+      await syncVideoPanel();
+    }
     const v = await tauriInvoke("play_queue_item", { index });
     if (v) {
       lastVideoId = v.id;
@@ -372,9 +377,7 @@ async function playFromQueue(index) {
         npThumb.classList.remove("hidden");
       }
       if (!isAudioOnly()) {
-        panelVideo?.classList.remove("hidden");
-        await new Promise((r) => requestAnimationFrame(r));
-        await syncVideoPanel();
+        setTimeout(() => syncVideoPanel().catch(() => {}), 200);
       }
       setStatus(LABELS[mode].playing);
       refreshQueue();
