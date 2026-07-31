@@ -134,6 +134,7 @@ promptub/
 | Problema | Solução |
 |----------|---------|
 | Vídeo não toca | Atualize para a última build; feche outros mpv abertos |
+| `localhost` / ERR_CONNECTION_REFUSED | O `.exe` foi gerado sem frontend. Rode `scripts\build-tauri.cmd` ou `INSTALAR.cmd` |
 | yt-dlp / mpv não encontrado | Reinstale com o `*_setup.exe` |
 | CMD piscando | Use build recente (processos ocultos) |
 | Acentos errados | Reporte — app usa UTF-8 end-to-end |

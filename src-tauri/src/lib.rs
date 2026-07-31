@@ -24,6 +24,15 @@ fn init_tools(handle: &tauri::AppHandle) {
     deps::init_bundled_tools(tools);
 }
 
+#[tauri::command]
+fn boot_mode() -> String {
+    if std::env::args().any(|a| a == "--screenshot-video") {
+        "video".into()
+    } else {
+        "music".into()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state: SharedState = Arc::new(AppState::new());
@@ -60,6 +69,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            boot_mode,
             deps::check_deps,
             youtube::search,
             youtube::related,

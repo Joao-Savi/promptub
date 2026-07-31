@@ -33,6 +33,7 @@ try {
     $bin = Join-Path $Root "bin"
     New-Item -ItemType Directory -Force -Path $bin | Out-Null
     Copy-Item $exe (Join-Path $bin "promptub.exe") -Force
+    Set-Content -Path (Join-Path $bin "promptub.build.stamp") -Value "tauri-build" -Encoding ascii
 
     $setup = Get-ChildItem (Join-Path $Root "src-tauri\target\release\bundle\nsis") -Filter "*setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $setup) {

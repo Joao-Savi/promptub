@@ -417,7 +417,13 @@ async function refreshQueue() {
 }
 
 async function init() {
-  applyMode("music");
+  let boot = "music";
+  if (isTauri()) {
+    try {
+      boot = await tauriInvoke("boot_mode");
+    } catch (_) {}
+  }
+  applyMode(boot === "video" ? "video" : "music");
   showWelcome();
   focusSearch();
 

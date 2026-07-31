@@ -2,14 +2,17 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $ExePath = Join-Path $Root "bin\promptub.exe"
+$StampPath = Join-Path $Root "bin\promptub.build.stamp"
 
-if (-not (Test-Path $ExePath)) {
-    Write-Host "Compilando promptub..." -ForegroundColor Yellow
+$needsBuild = -not (Test-Path $ExePath) -or -not (Test-Path $StampPath)
+if ($needsBuild) {
+    Write-Host "Gerando build de producao (frontend embutido)..." -ForegroundColor Yellow
     & (Join-Path $PSScriptRoot "build-tauri.ps1")
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 if (-not (Test-Path $ExePath)) {
-    Write-Error "promptub.exe nao encontrado. Instale Visual C++ Build Tools e rode scripts\build-tauri.ps1"
+    Write-Error "promptub.exe nao encontrado. Rode scripts\build-tauri.cmd"
 }
 
 $Desktop = [Environment]::GetFolderPath("Desktop")
