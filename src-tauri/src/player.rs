@@ -106,7 +106,7 @@ impl Player {
         let ytdl_raw = if audio_only {
             self.ytdl_raw_options("android")
         } else {
-            self.ytdl_raw_options("android,web")
+            self.ytdl_raw_options("android")
         };
         ipc_property(&self.pipe_name, "ytdl-raw-options", json!(ytdl_raw))?;
 
@@ -227,7 +227,7 @@ impl Player {
                 args.push(format!("--geometry={w}x{h}+{x}+{y}"));
                 args.push("--border=no".to_string());
                 args.push("--ontop".to_string());
-                args.push("--title=promptub stream".to_string());
+                args.push("--title=promptub-stream".to_string());
             }
         }
 
