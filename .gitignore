@@ -1,0 +1,27 @@
+# Binaries
+promptub
+promptub.exe
+bin/
+
+# Frontend / Tauri
+node_modules/
+dist/
+src-tauri/target/
+
+# Bundled tools (downloaded at build)
+src-tauri/resources/tools/*.exe
+src-tauri/resources/tools/*.dll
+
+# Session / secrets
+session-*.txt
+*.cookies
+config.local.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json

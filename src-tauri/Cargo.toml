@@ -1,0 +1,31 @@
+[package]
+name = "promptub"
+version = "0.3.0"
+description = "YouTube leve — estilo Spotify"
+authors = ["promptub"]
+edition = "2021"
+
+[lib]
+name = "promptub_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+keyring = "3"
+encoding_rs = "0.8"
+parking_lot = "0.12"
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["handleapi", "fileapi", "namedpipeapi", "winnt", "winuser", "libloaderapi"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+strip = true

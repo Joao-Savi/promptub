@@ -1,0 +1,20 @@
+{
+  "name": "promptub",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "tauri": "tauri",
+    "tauri:dev": "scripts\\dev-tauri.cmd",
+    "tauri:build": "scripts\\build-tauri.cmd"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "vite": "^6"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  }
+}

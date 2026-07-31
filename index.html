@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>promptub // terminal</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="sidebar-left terminal-panel">
+        <div class="term-header"><span class="term-dots">●●●</span>SYS/NAV</div>
+        <div class="logo">promptub<span class="logo-cursor"></span></div>
+        <p id="premium-badge" class="badge">MODO GRATUITO</p>
+        <nav class="tabs">
+          <button class="tab active" data-mode="music">audio.sys</button>
+          <button class="tab" data-mode="video">video.sys</button>
+        </nav>
+        <button id="btn-premium" class="btn-secondary">[ AUTH ] PREMIUM</button>
+      </aside>
+
+      <main class="main">
+        <div class="main-inner">
+          <div class="term-header"><span class="term-dots">●●●</span>MAIN // TTY1</div>
+
+          <header class="search-header">
+            <input
+              id="search-input"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="_buscar no youtube..."
+              tabindex="1"
+            />
+            <button id="btn-search" class="btn-primary">[ BUSCAR ]</button>
+            <button id="btn-rec-playlist" class="btn-accent" title="Montar playlist com base no seu gosto">[ REC.PL ]</button>
+          </header>
+
+          <section id="panel-results" class="hidden">
+            <h2 id="results-title">Resultados</h2>
+            <div id="results" class="grid"></div>
+          </section>
+
+          <section id="panel-recommended" class="hidden">
+            <div class="section-header">
+              <div>
+                <h2>Recomendados</h2>
+                <p id="recommended-subtitle" class="muted">clique em atualizar para buscar</p>
+              </div>
+              <button id="btn-refresh-rec" class="btn-accent" title="Buscar recomendados do YouTube">[ ATUALIZAR ]</button>
+            </div>
+            <div id="recommended" class="grid"></div>
+          </section>
+
+          <section id="panel-live" class="hidden">
+            <h2>Lives // youtube</h2>
+            <p class="muted">ate 4 transmissoes ao vivo</p>
+            <div id="live-results" class="grid"></div>
+          </section>
+
+          <section id="panel-playlist" class="hidden">
+            <div class="playlist-header">
+              <div>
+                <h2 id="playlist-title">Playlist recomendada</h2>
+                <p id="playlist-subtitle" class="muted"></p>
+              </div>
+              <button id="btn-playlist-to-queue" class="btn-primary hidden">[ +FILA ]</button>
+            </div>
+            <div id="playlist-results" class="grid"></div>
+          </section>
+
+          <section id="panel-video" class="hidden">
+            <div class="video-stage-header">STREAM // VIDEO</div>
+            <div id="video-stage" class="video-stage"></div>
+          </section>
+
+          <section id="panel-welcome">
+            <pre class="welcome-ascii" aria-hidden="true">╔══════════════════════════════════════╗
+║  PROMPTUB v0.3  //  YT TERMINAL      ║
+║  stream engine: mpv + yt-dlp         ║
+╚══════════════════════════════════════╝</pre>
+            <h2 id="welcome-title">Bem-vindo</h2>
+            <p id="welcome-text" class="muted">
+              digite uma query acima e pressione ENTER para iniciar o stream.
+            </p>
+          </section>
+        </div>
+      </main>
+
+      <aside class="queue-panel terminal-panel">
+        <div class="term-header"><span class="term-dots">●●●</span>QUEUE.SYS</div>
+        <div class="queue-header">
+          <h2>Fila</h2>
+          <button id="btn-clear-queue" class="btn-icon" title="Limpar fila">CLR</button>
+        </div>
+        <ul id="queue-list" class="queue-list"></ul>
+      </aside>
+
+      <footer class="player-bar">
+        <div id="now-playing" class="now-playing">
+          <img id="np-thumb" class="np-thumb hidden" alt="" />
+          <div class="np-info">
+            <span id="np-title">_idle — aguardando stream</span>
+            <span id="np-mode" class="np-mode">AUDIO.SYS</span>
+          </div>
+        </div>
+        <div class="controls">
+          <button id="btn-prev" title="Anterior">&lt;&lt;</button>
+          <button id="btn-stop" title="Parar">[||]</button>
+          <button id="btn-next" title="Próximo">&gt;&gt;</button>
+        </div>
+        <div class="volume-control" title="Volume">
+          <span class="volume-label">VOL</span>
+          <input type="range" id="volume-slider" min="0" max="100" value="100" />
+        </div>
+        <span id="status" class="status"></span>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
