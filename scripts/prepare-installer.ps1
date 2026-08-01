@@ -32,17 +32,33 @@ if (-not (Test-Path $mpvDest)) {
         }
     } else {
         Write-Host "Baixando mpv portable..." -ForegroundColor Cyan
-        $zip = Join-Path $env:TEMP "promptub-mpv.zip"
-        $url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/v0.39.0/mpv-x86_64-v0.39.0.zip"
-        Invoke-WebRequest -Uri $url -OutFile $zip
-        Expand-Archive -Path $zip -DestinationPath (Join-Path $env:TEMP "promptub-mpv") -Force
-        $found = Get-ChildItem (Join-Path $env:TEMP "promptub-mpv") -Recurse -Filter "mpv.exe" | Select-Object -First 1
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
+        $asset = $release.assets | Where-Object { $_.name -match '^mpv-x86_64-\d{8}-git-.+\.7z$' -and $_.name -notmatch '-v3-' } | Select-Object -First 1
+        if (-not $asset) { throw "Nenhum asset mpv-x86_64 encontrado no release latest" }
+        $archive = Join-Path $env:TEMP "promptub-mpv.7z"
+        $extract = Join-Path $env:TEMP "promptub-mpv"
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
+        if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $extract | Out-Null
+        $sevenZip = @(
+            "${env:ProgramFiles}\7-Zip\7z.exe",
+            "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($sevenZip) {
+            & $sevenZip x $archive "-o$extract" -y | Out-Null
+        } elseif (Get-Command tar -ErrorAction SilentlyContinue) {
+            tar -xf $archive -C $extract
+        } else {
+            throw "Baixe o mpv ou instale o 7-Zip para extrair o pacote .7z"
+        }
+        $found = Get-ChildItem $extract -Recurse -Filter "mpv.exe" | Select-Object -First 1
         if (-not $found) { throw "mpv.exe nao encontrado no pacote baixado" }
         Copy-Item $found.FullName $mpvDest -Force
         Get-ChildItem $found.DirectoryName -Filter "*.dll" | ForEach-Object {
             Copy-Item $_.FullName $Tools -Force
         }
-        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+        Remove-Item $archive -Force -ErrorAction SilentlyContinue
+        Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

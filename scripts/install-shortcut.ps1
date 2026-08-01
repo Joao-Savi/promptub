@@ -15,13 +15,14 @@ if (-not (Test-Path $ExePath)) {
     Write-Error "promptub.exe nao encontrado. Rode scripts\build-tauri.cmd"
 }
 
+$Launcher = Join-Path $PSScriptRoot "open-promptub.cmd"
 $Desktop = [Environment]::GetFolderPath("Desktop")
 $ShortcutPath = Join-Path $Desktop "promptub.lnk"
 
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-$Shortcut.TargetPath = $ExePath
-$Shortcut.WorkingDirectory = (Split-Path $ExePath -Parent)
+$Shortcut.TargetPath = $Launcher
+$Shortcut.WorkingDirectory = (Split-Path $Launcher -Parent)
 $Shortcut.Description = "YouTube e YouTube Music - estilo Spotify"
 $Shortcut.Save()
 

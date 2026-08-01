@@ -18,8 +18,11 @@ const PRINT_FIELDS: &str = "%(id)s\t%(title)s\t%(uploader)s\t%(duration_string)s
 
 pub const SEARCH_LIMIT: usize = 10;
 pub const RELATED_LIMIT: usize = 6;
-pub const HOME_REC_LIMIT: usize = 8;
+pub const HOME_FEED_LIMIT: usize = 12;
+pub const HOME_REC_LIMIT: usize = 10;
 pub const HOME_LIVE_LIMIT: usize = 4;
+pub const HOME_CHANNEL_LIMIT: usize = 12;
+pub const VIDEO_CONTEXT_FEED_LIMIT: usize = 24;
 
 impl Video {
     pub(crate) fn from_line(line: &str) -> Option<Self> {
@@ -68,6 +71,53 @@ fn ytdlp_base(cookies: &str) -> Vec<String> {
     args
 }
 
+fn yt_extractor_args(cookies: &str) -> &'static str {
+    if cookies.is_empty() {
+        "youtube:player_client=android,web"
+    } else {
+        "youtube:player_client=web,default"
+    }
+}
+
+fn push_yt_extractor(args: &mut Vec<String>, cookies: &str) {
+    args.push("--extractor-args".into());
+    args.push(yt_extractor_args(cookies).into());
+}
+
+pub(crate) fn fetch_subscriptions(cookies: &str, limit: usize) -> Result<Vec<Video>, String> {
+    if cookies.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut args = ytdlp_base(cookies);
+    push_yt_extractor(&mut args, cookies);
+    args.extend([
+        "--flat-playlist".into(),
+        "--playlist-end".into(),
+        limit.to_string(),
+        "--print".into(),
+        PRINT_FIELDS.into(),
+        "https://www.youtube.com/feed/subscriptions".into(),
+    ]);
+    run_list(args)
+}
+
+pub(crate) fn fetch_yt_history(cookies: &str, limit: usize) -> Result<Vec<Video>, String> {
+    if cookies.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut args = ytdlp_base(cookies);
+    push_yt_extractor(&mut args, cookies);
+    args.extend([
+        "--flat-playlist".into(),
+        "--playlist-end".into(),
+        limit.to_string(),
+        "--print".into(),
+        PRINT_FIELDS.into(),
+        "https://www.youtube.com/feed/history".into(),
+    ]);
+    run_list(args)
+}
+
 pub(crate) fn run_list(args: Vec<String>) -> Result<Vec<Video>, String> {
     let ytdlp = find_ytdlp().ok_or("yt-dlp nao encontrado")?;
     let output = utf8_cmd(&ytdlp)
@@ -84,16 +134,30 @@ pub(crate) fn run_list(args: Vec<String>) -> Result<Vec<Video>, String> {
 }
 
 pub(crate) fn fetch_search(cookies: &str, query: &str, limit: usize) -> Result<Vec<Video>, String> {
+    search_with_mode(cookies, query, limit, false)
+}
+
+/// Busca ordenada por data (videos mais recentes primeiro) — proxy de "novidades".
+pub(crate) fn fetch_search_recent(cookies: &str, query: &str, limit: usize) -> Result<Vec<Video>, String> {
+    search_with_mode(cookies, query, limit, true)
+}
+
+fn search_with_mode(cookies: &str, query: &str, limit: usize, by_date: bool) -> Result<Vec<Video>, String> {
     let q = query.trim();
     if q.is_empty() {
         return Ok(vec![]);
     }
     let mut args = ytdlp_base(cookies);
+    push_yt_extractor(&mut args, cookies);
     args.extend([
         "--flat-playlist".into(),
         "--print".into(),
         PRINT_FIELDS.into(),
-        format!("ytsearch{limit}:{q}"),
+        if by_date {
+            format!("ytsearchdate{limit}:{q}")
+        } else {
+            format!("ytsearch{limit}:{q}")
+        },
     ]);
     run_list(args)
 }
@@ -150,6 +214,22 @@ pub(crate) fn fetch_live(cookies: &str, limit: usize) -> Result<Vec<Video>, Stri
     Ok(items)
 }
 
+fn fetch_live_search(cookies: &str, query: &str, limit: usize) -> Result<Vec<Video>, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut items = fetch_search(cookies, &format!("{q} ao vivo"), limit.saturating_mul(3))?;
+    items.retain(|v| v.is_live);
+    if items.len() < limit {
+        let mut more = fetch_search(cookies, q, limit.saturating_mul(2))?;
+        more.retain(|v| v.is_live);
+        items.append(&mut more);
+    }
+    items.truncate(limit);
+    Ok(items)
+}
+
 pub(crate) fn fetch_video(cookies: &str, video_id: &str) -> Result<Option<Video>, String> {
     if video_id.is_empty() {
         return Ok(None);
@@ -169,13 +249,6 @@ use crate::state::SharedState;
 use std::collections::HashSet;
 use tauri::State;
 
-#[derive(Serialize)]
-pub struct HomeFeed {
-    pub recommended: Vec<Video>,
-    pub live: Vec<Video>,
-    pub seed_label: String,
-}
-
 fn push_unique(out: &mut Vec<Video>, seen: &mut HashSet<String>, items: Vec<Video>) {
     for v in items {
         if seen.insert(v.id.clone()) {
@@ -184,70 +257,145 @@ fn push_unique(out: &mut Vec<Video>, seen: &mut HashSet<String>, items: Vec<Vide
     }
 }
 
-pub(crate) fn build_home_feed(
-    cookies: &str,
-    mode: &str,
-    seed: Option<Video>,
-) -> Result<HomeFeed, String> {
-    let is_music = mode != "video";
+#[derive(Serialize)]
+pub struct HomeFeed {
+    pub feed: Vec<Video>,
+    pub recommended: Vec<Video>,
+    pub live: Vec<Video>,
+    pub channel_news: Vec<Video>,
+    pub seed_label: String,
+}
+
+fn build_music_home(cookies: &str, seed: Option<Video>) -> Result<HomeFeed, String> {
     let mut seen = HashSet::new();
     let mut recommended = Vec::new();
 
     let seed_label = if let Some(v) = seed {
         let label = v.title.clone();
-        if is_music {
-            push_unique(
-                &mut recommended,
-                &mut seen,
-                fetch_mix(cookies, &v.id, HOME_REC_LIMIT)?,
-            );
-        } else {
-            push_unique(
-                &mut recommended,
-                &mut seen,
-                fetch_rd(cookies, &v.id, HOME_REC_LIMIT)?,
-            );
-        }
+        push_unique(
+            &mut recommended,
+            &mut seen,
+            fetch_mix(cookies, &v.id, HOME_REC_LIMIT)?,
+        );
         label
-    } else if is_music {
+    } else {
         push_unique(
             &mut recommended,
             &mut seen,
             fetch_search(cookies, "music mix", HOME_REC_LIMIT)?,
         );
         "explorar musicas".into()
-    } else {
-        push_unique(
-            &mut recommended,
-            &mut seen,
-            fetch_search(cookies, "videos em alta", HOME_REC_LIMIT)?,
-        );
-        "explorar videos".into()
     };
 
     recommended.truncate(HOME_REC_LIMIT);
 
-    let live = if is_music {
-        vec![]
-    } else {
-        fetch_live(cookies, HOME_LIVE_LIMIT).unwrap_or_default()
-    };
-
     Ok(HomeFeed {
+        feed: vec![],
         recommended,
-        live,
+        live: vec![],
+        channel_news: vec![],
         seed_label,
     })
 }
 
+fn build_video_home(
+    cookies: &str,
+    seed: Option<Video>,
+    history: &crate::history::WatchHistory,
+) -> Result<HomeFeed, String> {
+    let rotation = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as usize)
+        .unwrap_or(0);
+
+    let (feed, recommended, live, channel_news, seed_label) =
+        crate::video_recommend::recommend_home_feed(cookies, seed, history, rotation)?;
+
+    Ok(HomeFeed {
+        feed,
+        recommended,
+        live,
+        channel_news,
+        seed_label,
+    })
+}
+
+pub(crate) fn build_home_feed(
+    cookies: &str,
+    mode: &str,
+    seed: Option<Video>,
+    history: &crate::history::WatchHistory,
+) -> Result<HomeFeed, String> {
+    if mode == "video" {
+        build_video_home(cookies, seed, history)
+    } else {
+        build_music_home(cookies, seed.or_else(|| history.music_seed()))
+    }
+}
+
+pub fn parse_youtube_id(input: &str) -> Option<String> {
+    let s = input.trim();
+    if s.len() == 11 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Some(s.to_string());
+    }
+    for prefix in [
+        "https://www.youtube.com/watch?v=",
+        "http://www.youtube.com/watch?v=",
+        "https://youtube.com/watch?v=",
+        "https://youtu.be/",
+        "http://youtu.be/",
+        "https://www.youtube.com/embed/",
+        "https://www.youtube.com/live/",
+        "https://www.youtube.com/shorts/",
+    ] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            let id: String = rest
+                .chars()
+                .take_while(|c| *c != '&' && *c != '?' && *c != '/')
+                .collect();
+            if id.len() == 11 {
+                return Some(id);
+            }
+        }
+    }
+    if let Some(idx) = s.find("v=") {
+        let id: String = s[idx + 2..]
+            .chars()
+            .take_while(|c| *c != '&' && *c != '#')
+            .collect();
+        if id.len() == 11 {
+            return Some(id);
+        }
+    }
+    None
+}
+
 #[tauri::command]
-pub fn search(state: State<'_, SharedState>, query: String) -> Result<Vec<Video>, String> {
-    let q = query.trim();
+pub async fn resolve_video(
+    state: State<'_, SharedState>,
+    video_id: String,
+) -> Result<Video, String> {
+    let id = parse_youtube_id(&video_id).ok_or("ID ou URL do YouTube invalido")?;
+    state.set_last_search(id.clone());
+    let cookies = state.cookies();
+    tauri::async_runtime::spawn_blocking(move || {
+        fetch_video(&cookies, &id)?.ok_or_else(|| "Video nao encontrado".into())
+    })
+    .await
+    .map_err(|e| format!("resolve: {e}"))?
+}
+
+#[tauri::command]
+pub async fn search(state: State<'_, SharedState>, query: String) -> Result<Vec<Video>, String> {
+    let q = query.trim().to_string();
     if q.is_empty() {
         return Ok(vec![]);
     }
-    state.set_last_search(q.to_string());
-    fetch_search(&state.cookies(), q, SEARCH_LIMIT)
+    state.set_last_search(q.clone());
+    let cookies = state.cookies();
+    tauri::async_runtime::spawn_blocking(move || fetch_search(&cookies, &q, SEARCH_LIMIT))
+        .await
+        .map_err(|e| format!("search: {e}"))?
 }
 
 #[tauri::command]
@@ -262,23 +410,76 @@ pub fn related(state: State<'_, SharedState>, video_id: String) -> Result<Vec<Vi
     Ok(items)
 }
 
+fn fetch_video_context_feed(cookies: &str, video: &Video) -> Result<Vec<Video>, String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+
+    push_unique(&mut out, &mut seen, fetch_rd(cookies, &video.id, 16)?);
+
+    let theme = crate::discover::simplify_for_search(&video.title);
+    if theme.len() >= 4 {
+        push_unique(
+            &mut out,
+            &mut seen,
+            fetch_search(cookies, &theme, 10)?,
+        );
+    }
+
+    let artist = crate::discover::normalize_uploader(&video.uploader);
+    if artist.len() > 3 {
+        push_unique(
+            &mut out,
+            &mut seen,
+            fetch_search(cookies, &artist, 8)?,
+        );
+    }
+
+    out.retain(|v| v.id != video.id);
+    out.truncate(VIDEO_CONTEXT_FEED_LIMIT);
+    Ok(out)
+}
+
 #[tauri::command]
-pub fn home_recommendations(
+pub async fn video_context_feed(
+    state: State<'_, SharedState>,
+    video_id: String,
+) -> Result<Vec<Video>, String> {
+    let id = parse_youtube_id(&video_id).unwrap_or_else(|| video_id.trim().to_string());
+    if id.is_empty() {
+        return Ok(vec![]);
+    }
+    let cookies = state.cookies();
+    tauri::async_runtime::spawn_blocking(move || {
+        let video = fetch_video(&cookies, &id)?.ok_or("Video nao encontrado")?;
+        fetch_video_context_feed(&cookies, &video)
+    })
+    .await
+    .map_err(|e| format!("video feed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn home_recommendations(
     state: State<'_, SharedState>,
     mode: String,
 ) -> Result<HomeFeed, String> {
+    let history = state.watch_history.lock().clone();
     let seed = if mode == "video" {
         state
             .last_watch_video
             .lock()
             .clone()
             .or_else(|| state.last_video.lock().clone())
+            .or_else(|| history.video_seed())
     } else {
         state
             .last_music_video
             .lock()
             .clone()
             .or_else(|| state.last_video.lock().clone())
+            .or_else(|| history.music_seed())
     };
-    build_home_feed(&state.cookies(), &mode, seed)
+    let cookies = state.cookies();
+    tauri::async_runtime::spawn_blocking(move || build_home_feed(&cookies, &mode, seed, &history))
+        .await
+        .map_err(|e| format!("recommendations: {e}"))?
 }

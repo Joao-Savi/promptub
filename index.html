@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>promptub // terminal</title>
+    <title>promptub · readme</title>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -21,8 +21,9 @@
       </aside>
 
       <main class="main">
-        <div class="main-inner">
+        <div class="main-inner md-prose">
           <div class="term-header"><span class="term-dots">●●●</span>MAIN // TTY1</div>
+          <p class="md-filepath" id="md-filepath"><code>promptub</code> / <code id="md-filename">README.md</code></p>
 
           <header class="search-header">
             <input
@@ -34,29 +35,97 @@
               tabindex="1"
             />
             <button id="btn-search" class="btn-primary">[ BUSCAR ]</button>
-            <button id="btn-rec-playlist" class="btn-accent" title="Montar playlist com base no seu gosto">[ REC.PL ]</button>
+            <button id="btn-rec-playlist" class="btn-accent music-only" title="Montar playlist com base no seu gosto">[ REC.PL ]</button>
+            <button id="btn-refresh-rec" class="btn-accent video-only hidden" title="Atualizar feed">[ ATUALIZAR ]</button>
           </header>
 
+          <div id="video-shell" class="video-shell hidden">
+            <div id="video-feed-scroll" class="video-feed-scroll">
+              <div id="video-player-block" class="video-player-block hidden">
+                <section id="panel-video">
+                  <div class="video-stage-header">▶ REPRODUZINDO</div>
+                  <div id="video-stage" class="video-stage">
+                    <video id="html-video" class="html-video" playsinline preload="metadata"></video>
+                    <div id="video-play-hint" class="video-play-hint hidden" aria-hidden="true">▶</div>
+                  </div>
+                  <div id="video-np-bar" class="video-np-bar hidden">
+                    <h3 id="video-np-title" class="video-np-title"></h3>
+                    <p id="video-np-meta" class="video-np-meta"></p>
+                  </div>
+                </section>
+              </div>
+
+              <div class="video-feed-toolbar">
+                <button type="button" id="btn-back-home-feed" class="btn-accent hidden" title="Voltar ao feed inicial">
+                  [ FEED INICIAL ]
+                </button>
+                <span id="video-feed-mode-label" class="video-feed-mode-label muted">explorar</span>
+              </div>
+
+              <div id="video-home-feed">
+                  <section id="panel-channel-news" class="hidden video-section">
+                    <div class="video-section-head">
+                      <h2>Novidades dos seus canais</h2>
+                      <p id="channel-news-subtitle" class="muted">uploads recentes</p>
+                    </div>
+                    <div id="channel-news-results" class="yt-grid"></div>
+                  </section>
+
+                  <section id="panel-feed" class="hidden video-section">
+                    <div class="video-section-head">
+                      <h2>Feed</h2>
+                      <p id="feed-subtitle" class="muted">para voce</p>
+                    </div>
+                    <div id="feed-results" class="yt-grid"></div>
+                  </section>
+
+                  <section id="panel-recommended" class="hidden video-section">
+                    <div class="video-section-head">
+                      <h2>Para voce</h2>
+                      <p id="recommended-subtitle" class="muted">carregando...</p>
+                    </div>
+                    <div id="recommended" class="yt-grid"></div>
+                  </section>
+
+                  <section id="panel-live" class="hidden video-section">
+                    <div class="video-section-head">
+                      <h2>Ao vivo</h2>
+                      <p class="muted">transmissoes em andamento</p>
+                    </div>
+                    <div id="live-results" class="yt-grid"></div>
+                  </section>
+                </div>
+
+                <section id="panel-video-context" class="hidden video-section">
+                  <div class="video-section-head">
+                    <h2>Relacionados</h2>
+                    <p id="video-context-subtitle" class="muted">carregando...</p>
+                  </div>
+                  <div id="video-context-results" class="yt-grid"></div>
+                </section>
+
+                <section id="panel-results-video" class="hidden video-section">
+                  <h2>Resultados da busca</h2>
+                  <div id="results-video" class="yt-grid"></div>
+                </section>
+            </div>
+          </div>
+
+          <div id="music-shell" class="music-shell">
           <section id="panel-results" class="hidden">
             <h2 id="results-title">Resultados</h2>
             <div id="results" class="grid"></div>
           </section>
 
-          <section id="panel-recommended" class="hidden">
+          <section id="panel-rec-music" class="hidden">
             <div class="section-header">
               <div>
                 <h2>Recomendados</h2>
-                <p id="recommended-subtitle" class="muted">clique em atualizar para buscar</p>
+                <p id="recommended-subtitle-music" class="muted">carregando recomendados...</p>
               </div>
-              <button id="btn-refresh-rec" class="btn-accent" title="Buscar recomendados do YouTube">[ ATUALIZAR ]</button>
+              <button id="btn-refresh-rec-music" class="btn-accent" title="Buscar recomendados">[ ATUALIZAR ]</button>
             </div>
-            <div id="recommended" class="grid"></div>
-          </section>
-
-          <section id="panel-live" class="hidden">
-            <h2>Lives // youtube</h2>
-            <p class="muted">ate 4 transmissoes ao vivo</p>
-            <div id="live-results" class="grid"></div>
+            <div id="recommended-music" class="grid"></div>
           </section>
 
           <section id="panel-playlist" class="hidden">
@@ -70,28 +139,29 @@
             <div id="playlist-results" class="grid"></div>
           </section>
 
-          <section id="panel-video" class="hidden">
-            <div class="video-stage-header">STREAM // VIDEO</div>
-            <div id="video-stage" class="video-stage"></div>
-          </section>
-
-          <section id="panel-welcome">
-            <pre class="welcome-ascii" aria-hidden="true">╔══════════════════════════════════════╗
-║  PROMPTUB v0.3  //  YT TERMINAL      ║
-║  stream engine: mpv + yt-dlp         ║
-╚══════════════════════════════════════╝</pre>
+          <section id="panel-welcome" class="md-doc">
+            <pre class="welcome-ascii" aria-hidden="true"><code>╔══════════════════════════════════════╗
+║  PROMPTUB v0.3.1  //  HTML5 VIDEO    ║
+║  stream: yt-dlp · audio: mpv         ║
+╚══════════════════════════════════════╝</code></pre>
             <h2 id="welcome-title">Bem-vindo</h2>
             <p id="welcome-text" class="muted">
-              digite uma query acima e pressione ENTER para iniciar o stream.
+              Player de stream estilo terminal — documentação embutida no app.
             </p>
+            <ul class="md-list" id="welcome-list">
+              <li>Digite uma query acima e pressione <code>Enter</code></li>
+              <li>Use <code>audio.sys</code> para música ou <code>video.sys</code> para vídeo</li>
+              <li>Clique no vídeo para pausar / retomar</li>
+            </ul>
           </section>
+          </div>
         </div>
       </main>
 
-      <aside class="queue-panel terminal-panel">
-        <div class="term-header"><span class="term-dots">●●●</span>QUEUE.SYS</div>
+      <aside id="queue-panel" class="queue-panel terminal-panel">
+        <div class="term-header"><span class="term-dots">●●●</span><span id="right-panel-label">QUEUE.SYS</span></div>
         <div class="queue-header">
-          <h2>Fila</h2>
+          <h2 id="queue-title">Fila</h2>
           <button id="btn-clear-queue" class="btn-icon" title="Limpar fila">CLR</button>
         </div>
         <ul id="queue-list" class="queue-list"></ul>
@@ -114,8 +184,25 @@
           <span class="volume-label">VOL</span>
           <input type="range" id="volume-slider" min="0" max="100" value="100" />
         </div>
+        <div id="quality-control" class="quality-control hidden" title="Qualidade do video">
+          <span class="quality-label">QUAL</span>
+          <select id="quality-select" class="quality-select">
+            <option value="360">360p</option>
+            <option value="480">480p</option>
+            <option value="720" selected>720p</option>
+            <option value="1080">1080p</option>
+            <option value="best">MAX</option>
+          </select>
+        </div>
         <span id="status" class="status"></span>
       </footer>
+    </div>
+    <div id="loading-overlay" class="loading-overlay hidden" aria-live="polite" aria-busy="false">
+      <div class="loading-box">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <p id="loading-text">CARREGANDO...</p>
+        <p id="loading-hint" class="loading-hint">buscando no youtube via yt-dlp</p>
+      </div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

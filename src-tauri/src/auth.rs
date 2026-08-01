@@ -20,6 +20,15 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html><html lang="pt-BR"><head><meta char
 
 #[tauri::command]
 pub fn is_logged_in() -> bool {
+    has_session_cookies()
+}
+
+#[tauri::command]
+pub fn has_premium_session() -> bool {
+    has_session_cookies()
+}
+
+fn has_session_cookies() -> bool {
     Entry::new(SERVICE, USER)
         .and_then(|e| e.get_password())
         .map(|s| !s.is_empty())
@@ -183,7 +192,7 @@ fn has_login_cookie(content: &str) -> bool {
 
 fn write_session_file(cookies: &str) -> Result<String, String> {
     let dir = dirs_session_dir()?;
-    let path = dir.join(format!("session-{}.txt", std::process::id()));
+    let path = dir.join("cookies.txt");
     fs::write(&path, cookies).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into())
 }

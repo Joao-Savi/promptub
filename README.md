@@ -133,6 +133,7 @@ promptub/
 
 | Problema | Solução |
 |----------|---------|
+| **"Parte do app bloqueada" / Controle de Aplicativo** | Rode **`scripts\pos-instalacao.cmd`** — desbloqueia arquivos e instala **yt-dlp** + **mpv** via winget (reputação Microsoft). **Não desativa** o Smart App Control. O app prioriza ferramentas do PATH em vez das cópias em `tools/`. |
 | Vídeo não toca | Atualize para a última build; feche outros mpv abertos |
 | `localhost` / ERR_CONNECTION_REFUSED | O `.exe` foi gerado sem frontend. Rode `scripts\build-tauri.cmd` ou `INSTALAR.cmd` |
 | yt-dlp / mpv não encontrado | Reinstale com o `*_setup.exe` |

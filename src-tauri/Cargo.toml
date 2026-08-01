@@ -1,6 +1,6 @@
 [package]
 name = "promptub"
-version = "0.3.0"
+version = "0.3.1"
 description = "YouTube leve — estilo Spotify"
 authors = ["promptub"]
 edition = "2021"
@@ -22,7 +22,7 @@ parking_lot = "0.12"
 raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["handleapi", "fileapi", "namedpipeapi", "winnt", "winuser", "libloaderapi"] }
+winapi = { version = "0.3", features = ["handleapi", "fileapi", "namedpipeapi", "winnt", "winuser", "libloaderapi", "wingdi"] }
 
 [profile.release]
 panic = "abort"

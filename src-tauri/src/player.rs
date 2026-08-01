@@ -1,5 +1,6 @@
-use crate::deps::{find_mpv, mpv_cmd};
+use crate::deps::{find_mpv, find_ytdlp, mpv_cmd};
 use crate::ipc;
+use crate::queue_refill;
 use crate::state::SharedState;
 use crate::youtube::Video;
 use serde_json::json;
@@ -9,13 +10,24 @@ use std::thread;
 use std::time::Duration;
 
 const FORMAT_AUDIO: &str = "bestaudio[ext=m4a]/bestaudio/best";
-const FORMAT_VIDEO: &str =
-    "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/b[height<=720]/best";
+
+pub fn video_format_for_quality(quality: &str) -> &'static str {
+    match quality {
+        "360" => "b[height<=360]/best[height<=360]/bestvideo[height<=360]+bestaudio/best",
+        "480" => "b[height<=480]/best[height<=480]/bestvideo[height<=480]+bestaudio/best",
+        "720" => "b[height<=720]/best[height<=720]/bestvideo[height<=720]+bestaudio/best",
+        "1080" => {
+            "b[height<=1080]/best[height<=1080]/bestvideo[height<=1080]+bestaudio/best"
+        }
+        "best" => "bestvideo+bestaudio/best",
+        _ => "b[height<=720]/best[height<=720]/bestvideo[height<=720]+bestaudio/best",
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MpvWindow {
     Audio,
-    Video { x: i32, y: i32, w: i32, h: i32 },
+    Video { wid: isize, w: i32, h: i32 },
 }
 
 pub struct Player {
@@ -46,13 +58,18 @@ impl Player {
         }
     }
 
-    pub fn set_video_area(&mut self, x: i32, y: i32, w: i32, h: i32) {
-        let next = MpvWindow::Video { x, y, w, h };
-        if self.mpv_window == next {
-            return;
-        }
+    pub fn set_video_area(&mut self, wid: isize, w: i32, h: i32) {
+        let next = MpvWindow::Video { wid, w, h };
+        let needs_restart = match self.mpv_window {
+            MpvWindow::Audio => true,
+            MpvWindow::Video {
+                wid: ow,
+                w: ow_w,
+                h: oh_h,
+            } => ow != wid || (ow_w - w).abs() > 2 || (oh_h - h).abs() > 2,
+        };
         self.mpv_window = next;
-        if self.daemon_responding() {
+        if needs_restart && self.daemon_responding() {
             let _ = self.restart();
         }
     }
@@ -62,6 +79,7 @@ impl Player {
             return;
         }
         self.mpv_window = MpvWindow::Audio;
+        crate::video_embed::clear_host();
         if self.daemon_responding() {
             let _ = self.restart();
         }
@@ -76,6 +94,7 @@ impl Player {
         video: &Video,
         audio_only: bool,
         direct_url: Option<&str>,
+        video_quality: &str,
     ) -> Result<(), String> {
         if audio_only {
             if self.mpv_window != MpvWindow::Audio {
@@ -90,24 +109,15 @@ impl Player {
 
         if audio_only {
             ipc_property(&self.pipe_name, "force-window", json!(false))?;
-            ipc_property(&self.pipe_name, "video", json!(false))?;
         } else {
             ipc_property(&self.pipe_name, "force-window", json!(true))?;
-            ipc_property(&self.pipe_name, "video", json!(true))?;
-            if let MpvWindow::Video { x, y, w, h } = self.mpv_window {
-                let _ = ipc_property(
-                    &self.pipe_name,
-                    "geometry",
-                    json!(format!("{w}x{h}+{x}+{y}")),
-                );
-            }
+            let _ = ipc_property(&self.pipe_name, "keepaspect-window", json!(true));
+            let _ = ipc_property(&self.pipe_name, "video-unscaled", json!(false));
+            let _ = ipc_property(&self.pipe_name, "panscan", json!(0.0));
         }
 
-        let ytdl_raw = if audio_only {
-            self.ytdl_raw_options("android")
-        } else {
-            self.ytdl_raw_options("android")
-        };
+        let client = if audio_only { "android" } else { "web,default" };
+        let ytdl_raw = self.ytdl_raw_options(client);
         ipc_property(&self.pipe_name, "ytdl-raw-options", json!(ytdl_raw))?;
 
         if let Some(url) = direct_url.filter(|_| audio_only) {
@@ -119,7 +129,11 @@ impl Player {
             }
             let _ = ipc_property(&self.pipe_name, "ytdl", json!(true));
         } else {
-            let format = if audio_only { FORMAT_AUDIO } else { FORMAT_VIDEO };
+            let format = if audio_only {
+                FORMAT_AUDIO
+            } else {
+                video_format_for_quality(video_quality)
+            };
             ipc_property(&self.pipe_name, "ytdl", json!(true))?;
             ipc_property(&self.pipe_name, "ytdl-format", json!(format))?;
             if ipc_loadfile(&self.pipe_name, &video.url).is_err() {
@@ -203,7 +217,9 @@ impl Player {
 
     fn start_daemon(&mut self) -> Result<(), String> {
         let mpv = find_mpv().ok_or("mpv nao encontrado. Reinstale o promptub.")?;
-        let ytdl_raw = self.ytdl_raw_options("android");
+        let audio_mode = matches!(self.mpv_window, MpvWindow::Audio);
+        let client = if audio_mode { "android" } else { "web,default" };
+        let ytdl_raw = self.ytdl_raw_options(client);
 
         let mut args = vec![
             "--idle=yes".to_string(),
@@ -218,16 +234,21 @@ impl Player {
             "--prefetch-playlist=yes".to_string(),
         ];
 
+        if let Some(ytdlp) = find_ytdlp() {
+            args.push(format!("--ytdl-program={ytdlp}"));
+        }
+
         match self.mpv_window {
             MpvWindow::Audio => {
                 args.push("--force-window=no".to_string());
+                args.push("--no-video".to_string());
             }
-            MpvWindow::Video { x, y, w, h } => {
-                args.push("--force-window=yes".to_string());
-                args.push(format!("--geometry={w}x{h}+{x}+{y}"));
-                args.push("--border=no".to_string());
-                args.push("--ontop".to_string());
-                args.push("--title=promptub-stream".to_string());
+            MpvWindow::Video { wid, .. } => {
+                args.push(format!("--wid={wid}"));
+                args.push("--force-window=immediate".to_string());
+                args.push("--keepaspect-window=yes".to_string());
+                args.push("--video-unscaled=no".to_string());
+                args.push("--no-border".to_string());
             }
         }
 
@@ -242,7 +263,6 @@ impl Player {
                 return Err("mpv encerrou ao iniciar. Reinstale o mpv ou reinicie o app.".into());
             }
             if ipc_cmd(&self.pipe_name, &["get_property", "idle-active"]).is_ok() {
-                let _ = ipc_property(&self.pipe_name, "focus-on-open", json!(false));
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(if i < 30 { 100 } else { 50 }));
@@ -256,6 +276,7 @@ impl Player {
         if let Some(mut child) = self.child.take() {
             kill_process_tree(&mut child);
         }
+        crate::video_embed::clear_host();
         thread::sleep(Duration::from_millis(100));
     }
 }
@@ -267,15 +288,19 @@ impl Drop for Player {
 }
 
 pub(crate) fn play_cached(state: &SharedState, video: &Video, audio_only: bool) -> Result<(), String> {
-    let direct = if audio_only {
-        state.stream_cache.get(&video.id)
-    } else {
-        None
-    };
+    if !audio_only {
+        crate::video_embed::clear_host();
+        let mut player = state.player.lock();
+        player.clear_video_area();
+        let _ = player.stop();
+        return Ok(());
+    }
+    let direct = state.stream_cache.get(&video.id);
+    let quality = state.video_quality.lock().clone();
     state
         .player
         .lock()
-        .play(video, audio_only, direct.as_deref())
+        .play(video, true, direct.as_deref(), &quality)
 }
 
 #[cfg(windows)]
@@ -336,6 +361,8 @@ pub fn watch_end_events(state: SharedState) {
                             let audio_only = *state.audio_only.lock();
                             if let Some(video) = state.queue.lock().next() {
                                 let _ = play_cached(&state, &video, audio_only);
+                                crate::stream::prewarm_queue_ahead(&state);
+                                queue_refill::maybe_refill_queue(&state);
                             }
                         }
                     }
@@ -390,6 +417,64 @@ fn send_ipc(pipe: &str, payload: &serde_json::Value) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn resolve_stream(
+    state: tauri::State<'_, SharedState>,
+    video_id: String,
+    video_url: Option<String>,
+) -> Result<String, String> {
+    let id = video_id.trim().to_string();
+    if id.is_empty() {
+        return Err("ID de video invalido".into());
+    }
+    if let Some(cached) = state.stream_cache.get(&id) {
+        return Ok(cached);
+    }
+    let cookies = state.cookies();
+    let quality = state.video_quality.lock().clone();
+    let audio_only = *state.audio_only.lock();
+    let id_fetch = id.clone();
+    let cookies_fetch = cookies.clone();
+    let url = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let video = video_for_stream(&cookies_fetch, &id_fetch, video_url.as_deref())?;
+        crate::stream::resolve_stream_url_with_quality(&cookies_fetch, &video, audio_only, &quality)
+    })
+    .await
+    .map_err(|e| format!("resolve_stream: {e}"))??;
+    state.stream_cache.put(id, url.clone());
+    Ok(url)
+}
+
+fn video_for_stream(cookies: &str, id: &str, video_url: Option<&str>) -> Result<Video, String> {
+    if let Some(url) = video_url.map(str::trim).filter(|u| !u.is_empty()) {
+        return Ok(Video {
+            id: id.to_string(),
+            title: String::new(),
+            uploader: String::new(),
+            duration: String::new(),
+            url: url.to_string(),
+            thumbnail: String::new(),
+            is_live: false,
+        });
+    }
+    crate::youtube::fetch_video(cookies, id)?.ok_or_else(|| "Video nao encontrado".into())
+}
+
+#[tauri::command]
+pub fn prewarm_streams(
+    state: tauri::State<'_, SharedState>,
+    items: Vec<Video>,
+) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let quality = state.video_quality.lock().clone();
+    state
+        .stream_cache
+        .prewarm_async(state.cookies(), items, false, quality);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn warmup(state: tauri::State<'_, SharedState>) -> Result<(), String> {
     state.player.lock().warmup()
 }
@@ -406,7 +491,11 @@ pub fn play(
         state.queue.lock().play_now(video.clone());
     }
     state.set_last_video(video.clone(), audio_only);
-    play_cached(&state, &video, audio_only)
+    state.watch_history.lock().record(video.clone(), audio_only);
+    play_cached(&state, &video, audio_only)?;
+    crate::stream::prewarm_queue_ahead(&state);
+    queue_refill::maybe_refill_queue(&state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -419,6 +508,8 @@ pub fn next(state: tauri::State<'_, SharedState>) -> Result<Option<Video>, Strin
     let audio_only = *state.audio_only.lock();
     if let Some(video) = state.queue.lock().next() {
         play_cached(&state, &video, audio_only)?;
+        crate::stream::prewarm_queue_ahead(&state);
+        queue_refill::maybe_refill_queue(&state);
         return Ok(Some(video));
     }
     Ok(None)
@@ -429,6 +520,8 @@ pub fn prev(state: tauri::State<'_, SharedState>) -> Result<Option<Video>, Strin
     let audio_only = *state.audio_only.lock();
     if let Some(video) = state.queue.lock().prev() {
         play_cached(&state, &video, audio_only)?;
+        crate::stream::prewarm_queue_ahead(&state);
+        queue_refill::maybe_refill_queue(&state);
         return Ok(Some(video));
     }
     Ok(None)
@@ -446,23 +539,22 @@ pub fn set_volume(state: tauri::State<'_, SharedState>, level: f64) -> Result<()
 
 #[tauri::command]
 pub fn sync_video_panel(
-    window: tauri::WebviewWindow,
+    _window: tauri::WebviewWindow,
     state: tauri::State<'_, SharedState>,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
 ) -> Result<(), String> {
-    let sf = window.scale_factor().map_err(|e| e.to_string())?;
-    let owner = crate::video_embed::hwnd_from_window(&window)?;
-    let (sx, sy, w, h) = crate::video_embed::screen_rect(
-        owner,
-        (x * sf).round() as i32,
-        (y * sf).round() as i32,
-        (width * sf).round() as i32,
-        (height * sf).round() as i32,
-    );
-    state.player.lock().set_video_area(sx, sy, w, h);
+    // Legado: overlay mpv desativado — video roda no <video> HTML5.
+    crate::video_embed::clear_host();
+    state.player.lock().clear_video_area();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_video_overlay_visible(_visible: bool) -> Result<(), String> {
+    crate::video_embed::clear_host();
     Ok(())
 }
 
@@ -473,14 +565,43 @@ pub fn hide_video_panel(state: tauri::State<'_, SharedState>) -> Result<(), Stri
 }
 
 #[tauri::command]
+pub fn get_video_quality(state: tauri::State<'_, SharedState>) -> String {
+    state.video_quality.lock().clone()
+}
+
+#[tauri::command]
+pub fn set_video_quality(
+    state: tauri::State<'_, SharedState>,
+    quality: String,
+) -> Result<(), String> {
+    let q = quality.trim();
+    if !["360", "480", "720", "1080", "best"].contains(&q) {
+        return Err("Qualidade invalida (360, 480, 720, 1080, best)".into());
+    }
+    *state.video_quality.lock() = q.to_string();
+    let audio_only = *state.audio_only.lock();
+    if !audio_only {
+        if let Some(v) = state
+            .queue
+            .lock()
+            .current_video()
+            .or_else(|| state.last_video.lock().clone())
+        {
+            state.stream_cache.remove(&v.id);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn prewarm_playlist(
     state: tauri::State<'_, SharedState>,
     items: Vec<Video>,
     audio_only: bool,
 ) -> Result<(), String> {
-    state
-        .stream_cache
-        .prewarm_async(state.cookies(), items, audio_only);
+    let _ = items;
+    let _ = audio_only;
+    crate::stream::prewarm_queue_ahead(&state);
     Ok(())
 }
 

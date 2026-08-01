@@ -35,13 +35,27 @@ try {
     Copy-Item $exe (Join-Path $bin "promptub.exe") -Force
     Set-Content -Path (Join-Path $bin "promptub.build.stamp") -Value "tauri-build" -Encoding ascii
 
-    $setup = Get-ChildItem (Join-Path $Root "src-tauri\target\release\bundle\nsis") -Filter "*setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    $releaseTools = Join-Path $Root "src-tauri\target\release\tools"
+    $srcTools = Join-Path $Root "src-tauri\resources\tools"
+    $binTools = Join-Path $bin "tools"
+    if (Test-Path $releaseTools) {
+        Copy-Item $releaseTools $binTools -Recurse -Force
+    } elseif (Test-Path $srcTools) {
+        Copy-Item $srcTools $binTools -Recurse -Force
+    }
+    Write-Host "Tools: bin\tools" -ForegroundColor Green
+
+    $setupDir = Join-Path $Root "src-tauri\target\release\bundle\nsis"
+    $setup = Get-ChildItem $setupDir -Filter "*setup.exe" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
     if (-not $setup) {
         $setup = Get-ChildItem -Path $env:TEMP -Recurse -Filter "promptub_*setup.exe" -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
     }
     if ($setup) {
+        Get-ChildItem $bin -Filter "*setup.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
         Copy-Item $setup.FullName (Join-Path $bin $setup.Name) -Force
         Write-Host "Installer: bin\$($setup.Name)" -ForegroundColor Green
     }

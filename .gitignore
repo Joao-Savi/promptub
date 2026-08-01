@@ -25,3 +25,8 @@ Thumbs.db
 .vscode/
 !.vscode/settings.json
 !.vscode/tasks.json
+
+# Build logs
+*.log
+build-sac-toggle.log
+build-sac-toggle.err.log

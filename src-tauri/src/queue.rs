@@ -1,7 +1,9 @@
 use crate::player::play_cached;
+use crate::queue_refill;
 use crate::state::SharedState;
 use crate::youtube::Video;
 use serde::Serialize;
+use std::collections::HashSet;
 use tauri::State;
 
 pub struct Queue {
@@ -71,6 +73,40 @@ impl Queue {
         }
     }
 
+    /// Proximas `count` faixas apos a que esta tocando (nao inclui a atual).
+    pub fn upcoming_from_current(&self, count: usize) -> Vec<Video> {
+        if self.current < 0 || self.items.is_empty() || count == 0 {
+            return vec![];
+        }
+        let start = self.current as usize + 1;
+        self.items.iter().skip(start).take(count).cloned().collect()
+    }
+
+    pub fn remaining_after_current(&self) -> usize {
+        if self.current < 0 || self.items.is_empty() {
+            return 0;
+        }
+        self.items
+            .len()
+            .saturating_sub(self.current as usize + 1)
+    }
+
+    pub fn existing_ids(&self) -> HashSet<String> {
+        self.items.iter().map(|v| v.id.clone()).collect()
+    }
+
+    pub fn append_unique(&mut self, items: Vec<Video>) -> usize {
+        let mut seen = self.existing_ids();
+        let mut added = 0usize;
+        for video in items {
+            if seen.insert(video.id.clone()) {
+                self.items.push(video);
+                added += 1;
+            }
+        }
+        added
+    }
+
     pub fn next(&mut self) -> Option<Video> {
         if self.items.is_empty() {
             return None;
@@ -106,7 +142,7 @@ impl Queue {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct QueueSnapshot {
     pub items: Vec<Video>,
     pub current: isize,
@@ -115,6 +151,8 @@ pub struct QueueSnapshot {
 #[tauri::command]
 pub fn enqueue(state: State<'_, SharedState>, video: Video) -> Result<(), String> {
     state.queue.lock().add(video);
+    crate::stream::prewarm_queue_ahead(&state);
+    queue_refill::maybe_refill_queue(&state);
     Ok(())
 }
 
@@ -131,12 +169,16 @@ pub fn clear_queue(state: State<'_, SharedState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn remove_queue_item(state: State<'_, SharedState>, index: usize) -> Result<(), String> {
-    state.queue.lock().remove_at(index)
+    state.queue.lock().remove_at(index)?;
+    crate::stream::prewarm_queue_ahead(&state);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn load_queue(state: State<'_, SharedState>, items: Vec<Video>) -> Result<(), String> {
     state.queue.lock().load_playlist(items);
+    crate::stream::prewarm_queue_ahead(&state);
+    queue_refill::maybe_refill_queue(&state);
     Ok(())
 }
 
@@ -150,6 +192,8 @@ pub fn play_queue_item(
     if let Some(ref v) = video {
         state.set_last_video(v.clone(), audio_only);
         play_cached(&state, v, audio_only)?;
+        crate::stream::prewarm_queue_ahead(&state);
+        queue_refill::maybe_refill_queue(&state);
     }
     Ok(video)
 }

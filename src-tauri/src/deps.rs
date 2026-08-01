@@ -6,12 +6,40 @@ static BUNDLED_YTDLP: OnceLock<Option<String>> = OnceLock::new();
 static BUNDLED_MPV: OnceLock<Option<String>> = OnceLock::new();
 
 pub fn init_bundled_tools(tools_dir: Option<PathBuf>) {
-    let (ytdlp, mpv) = match tools_dir {
-        Some(dir) => (tool_in_dir(&dir, "yt-dlp"), tool_in_dir(&dir, "mpv")),
-        None => (None, None),
-    };
+    let mut dirs: Vec<PathBuf> = tools_dir.into_iter().collect();
+    dirs.extend(local_tool_dirs());
+    let ytdlp = dirs.iter().find_map(|d| tool_in_dir(d, "yt-dlp"));
+    let mpv = dirs.iter().find_map(|d| tool_in_dir(d, "mpv"));
     let _ = BUNDLED_YTDLP.set(ytdlp);
     let _ = BUNDLED_MPV.set(mpv);
+}
+
+fn local_tool_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let Ok(exe) = std::env::current_exe() else {
+        return dirs;
+    };
+    let Some(parent) = exe.parent() else {
+        return dirs;
+    };
+    dirs.push(parent.join("tools"));
+    dirs.push(parent.join("resources").join("tools"));
+    dirs.push(
+        parent
+            .join("..")
+            .join("src-tauri")
+            .join("resources")
+            .join("tools"),
+    );
+    dirs.push(
+        parent
+            .join("..")
+            .join("src-tauri")
+            .join("target")
+            .join("release")
+            .join("tools"),
+    );
+    dirs
 }
 
 fn tool_in_dir(dir: &Path, name: &str) -> Option<String> {
@@ -35,13 +63,14 @@ pub fn check_deps() -> Result<(), String> {
 }
 
 pub fn find_ytdlp() -> Option<String> {
-    bundled(BUNDLED_YTDLP.get()).or_else(|| which("yt-dlp"))
+    // Prefer PATH (winget/winget-like installs) — SAC trusts these more than bundled copies.
+    which("yt-dlp")
+        .or_else(|| bundled(BUNDLED_YTDLP.get()))
+        .or_else(|| local_tool_dirs().iter().find_map(|d| tool_in_dir(d, "yt-dlp")))
 }
 
 pub fn find_mpv() -> Option<String> {
-    if let Some(p) = bundled(BUNDLED_MPV.get()) {
-        return Some(p);
-    }
+    // Same order: system install first, bundled fallback for offline setups.
     if let Some(p) = which("mpv") {
         return Some(p);
     }
@@ -50,7 +79,12 @@ pub fn find_mpv() -> Option<String> {
             return Some(candidate);
         }
     }
-    None
+    if let Some(p) = bundled(BUNDLED_MPV.get()) {
+        return Some(p);
+    }
+    local_tool_dirs()
+        .iter()
+        .find_map(|d| tool_in_dir(d, "mpv"))
 }
 
 fn bundled(slot: Option<&Option<String>>) -> Option<String> {
