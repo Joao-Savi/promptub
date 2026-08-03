@@ -12,6 +12,7 @@ mod music_recommend;
 mod recommend;
 mod state;
 mod stream;
+mod taste;
 mod text;
 mod youtube;
 
@@ -114,6 +115,9 @@ pub fn run() {
             auth::login,
             auth::logout,
             lyrics::fetch_lyrics_cmd,
+            taste::taste_like,
+            taste::taste_dislike,
+            taste::taste_get,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri");

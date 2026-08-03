@@ -1,3 +1,4 @@
+use crate::discover::title_fingerprint;
 use crate::player;
 use crate::queue_refill;
 use crate::state::SharedState;
@@ -95,14 +96,39 @@ impl Queue {
         self.items.iter().map(|v| v.id.clone()).collect()
     }
 
+    pub fn purge_where(&mut self, pred: &dyn Fn(&Video) -> bool) -> usize {
+        let before = self.items.len();
+        let cur_idx = self.current;
+        self.items.retain(|v| !pred(v));
+        let removed = before.saturating_sub(self.items.len());
+        if self.items.is_empty() {
+            self.current = -1;
+        } else if cur_idx >= 0 {
+            let cur = cur_idx as usize;
+            if cur >= self.items.len() {
+                self.current = self.items.len() as isize - 1;
+            }
+        }
+        removed
+    }
+
     pub fn append_unique(&mut self, items: Vec<Video>) -> usize {
-        let mut seen = self.existing_ids();
+        let mut seen_ids = self.existing_ids();
+        let mut seen_fps: HashSet<String> = self
+            .items
+            .iter()
+            .map(title_fingerprint)
+            .collect();
         let mut added = 0usize;
         for video in items {
-            if seen.insert(video.id.clone()) {
-                self.items.push(video);
-                added += 1;
+            let fp = title_fingerprint(&video);
+            if seen_ids.contains(&video.id) || seen_fps.contains(&fp) {
+                continue;
             }
+            seen_ids.insert(video.id.clone());
+            seen_fps.insert(fp);
+            self.items.push(video);
+            added += 1;
         }
         added
     }

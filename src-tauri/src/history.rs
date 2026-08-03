@@ -1,13 +1,92 @@
 //! Historico local de reproducao — persiste entre sessoes.
 
+use crate::discover::{artist_key, extract_artist_label, title_fingerprint};
 use crate::youtube::Video;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_RECENT: usize = 64;
+const MAX_TASTE_ENTRIES: usize = 256;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TasteState {
+    #[default]
+    None,
+    Liked,
+    Disliked,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TasteProfile {
+    #[serde(default)]
+    pub liked_tracks: HashSet<String>,
+    #[serde(default)]
+    pub disliked_tracks: HashSet<String>,
+    #[serde(default)]
+    pub liked_artists: HashSet<String>,
+    #[serde(default)]
+    pub disliked_artists: HashSet<String>,
+}
+
+impl TasteProfile {
+    pub fn like(&mut self, video: &Video) {
+        let artist = artist_key(video);
+        self.liked_tracks.insert(video.id.clone());
+        self.disliked_tracks.remove(&video.id);
+        if !artist.is_empty() {
+            self.liked_artists.insert(artist.clone());
+            self.disliked_artists.remove(&artist);
+        }
+        self.trim();
+    }
+
+    pub fn dislike(&mut self, video: &Video) {
+        let artist = artist_key(video);
+        self.disliked_tracks.insert(video.id.clone());
+        self.liked_tracks.remove(&video.id);
+        if !artist.is_empty() {
+            self.disliked_artists.insert(artist.clone());
+            self.liked_artists.remove(&artist);
+        }
+        self.trim();
+    }
+
+    pub fn state_for(&self, video: &Video) -> TasteState {
+        let artist = artist_key(video);
+        if self.disliked_tracks.contains(&video.id) || self.disliked_artists.contains(&artist) {
+            return TasteState::Disliked;
+        }
+        if self.liked_tracks.contains(&video.id) || self.liked_artists.contains(&artist) {
+            return TasteState::Liked;
+        }
+        TasteState::None
+    }
+
+    pub fn is_blocked(&self, video: &Video) -> bool {
+        matches!(self.state_for(video), TasteState::Disliked)
+    }
+
+    fn trim(&mut self) {
+        trim_set(&mut self.liked_tracks, MAX_TASTE_ENTRIES);
+        trim_set(&mut self.disliked_tracks, MAX_TASTE_ENTRIES);
+        trim_set(&mut self.liked_artists, MAX_TASTE_ENTRIES);
+        trim_set(&mut self.disliked_artists, MAX_TASTE_ENTRIES);
+    }
+}
+
+fn trim_set(set: &mut HashSet<String>, max: usize) {
+    if set.len() <= max {
+        return;
+    }
+    let drop: Vec<String> = set.iter().take(set.len() - max).cloned().collect();
+    for k in drop {
+        set.remove(&k);
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WatchEntry {
@@ -24,6 +103,8 @@ pub struct WatchHistory {
     pub last_search: String,
     #[serde(default)]
     pub recent_searches: Vec<String>,
+    #[serde(default)]
+    pub taste: TasteProfile,
 }
 
 impl WatchHistory {
@@ -116,11 +197,57 @@ impl WatchHistory {
             .collect()
     }
 
-    pub fn played_ids(&self) -> std::collections::HashSet<String> {
+    pub fn played_ids(&self) -> HashSet<String> {
         self.recent_music
             .iter()
             .map(|e| e.video.id.clone())
             .collect()
+    }
+
+    pub fn played_fingerprints(&self) -> HashSet<String> {
+        self.recent_music
+            .iter()
+            .map(|e| title_fingerprint(&e.video))
+            .collect()
+    }
+
+    pub fn blocked_ids(&self) -> HashSet<String> {
+        self.taste.disliked_tracks.clone()
+    }
+
+    pub fn is_blocked(&self, video: &Video) -> bool {
+        self.taste.is_blocked(video)
+    }
+
+    pub fn like(&mut self, video: &Video) {
+        self.taste.like(video);
+        let _ = self.save();
+    }
+
+    pub fn dislike(&mut self, video: &Video) {
+        self.taste.dislike(video);
+        let _ = self.save();
+    }
+
+    pub fn taste_state(&self, video: &Video) -> TasteState {
+        self.taste.state_for(video)
+    }
+
+    /// Contexto rico para genero: historico, likes e faixa atual.
+    pub fn listening_context(&self, last_search: &str, seed: &Video) -> String {
+        let mut parts = vec![
+            last_search.trim().to_string(),
+            seed.title.clone(),
+            extract_artist_label(seed),
+        ];
+        for v in self.top_music(5) {
+            parts.push(v.title.clone());
+            parts.push(extract_artist_label(&v));
+        }
+        for artist in self.taste.liked_artists.iter().take(6) {
+            parts.push(artist.clone());
+        }
+        parts.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
     }
 
     pub fn known_uploaders(&self) -> std::collections::HashSet<String> {

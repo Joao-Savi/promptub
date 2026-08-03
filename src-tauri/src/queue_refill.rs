@@ -1,12 +1,12 @@
 use crate::discover::{
-    artist_key, build_music_context, contextual_search_queries,
-    filter_relevant, interleave_sources, pick_diverse_candidates,
+    artist_key, build_music_context_rich, contextual_search_queries,
+    filter_relevant, interleave_sources, pick_diverse_candidates, title_fingerprint,
 };
 use crate::queue::{Queue, QueueSnapshot};
 use crate::state::SharedState;
 use crate::stream;
 use crate::youtube::{self, Video};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::thread;
 use tauri::Emitter;
@@ -68,42 +68,55 @@ fn refill_worker(
         .refill_generation
         .fetch_add(1, Ordering::Relaxed);
 
-    let (mut exclude, uploader_counts, alt_seeds) = {
+    let (exclude, exclude_fps, uploader_counts, alt_seeds, ctx, taste) = {
         let q = state.queue.lock();
+        let history = state.watch_history.lock();
+        let mut exclude = q.existing_ids();
+        for id in history.played_ids() {
+            exclude.insert(id);
+        }
+        for id in history.blocked_ids() {
+            exclude.insert(id);
+        }
+        let mut exclude_fps = history.played_fingerprints();
+        for v in &q.snapshot().items {
+            exclude_fps.insert(title_fingerprint(v));
+        }
+        let rich = history.listening_context(last_search, seed);
+        let ctx = build_music_context_rich(&rich, seed);
+        let taste = history.taste.clone();
         (
-            q.existing_ids(),
+            exclude,
+            exclude_fps,
             uploader_counts(&q.snapshot().items),
             alternate_seeds(&q, seed),
+            ctx,
+            taste,
         )
     };
 
-    for id in state.watch_history.lock().played_ids() {
-        exclude.insert(id);
-    }
-
     let queries = contextual_search_queries(last_search, seed, rotation);
-    let ctx = build_music_context(last_search, seed);
     let seed_artist = artist_key(seed);
 
     let mut sources: Vec<Vec<Video>> = Vec::new();
 
     match rotation % 3 {
         0 => {
-            sources.extend(fetch_searches(cookies, &queries, 3, 8));
-            if let Some(alt) = alt_seeds.first() {
-                sources.push(fetch_genre_mix(cookies, alt, last_search, 6)?);
+            sources.extend(fetch_searches(cookies, &queries, 4, 8));
+            for alt in alt_seeds.iter().take(2) {
+                sources.push(fetch_genre_mix(cookies, alt, &ctx, 5)?);
             }
         }
         1 => {
-            sources.extend(fetch_searches(cookies, &queries, 2, 10));
-            for q in queries.iter().skip(2).take(2) {
+            sources.extend(fetch_searches(cookies, &queries, 3, 10));
+            for q in queries.iter().skip(3).take(2) {
                 sources.push(youtube::fetch_search_recent(cookies, q, 6)?);
             }
         }
         _ => {
-            sources.extend(fetch_searches(cookies, &queries, 4, 6));
-            for alt in alt_seeds.iter().take(2) {
-                sources.push(fetch_genre_mix(cookies, alt, last_search, 4)?);
+            sources.extend(fetch_searches(cookies, &queries, 5, 6));
+            for alt in alt_seeds.iter().take(3) {
+                sources.push(fetch_genre_mix(cookies, alt, &ctx, 4)?);
             }
         }
     }
@@ -113,9 +126,12 @@ fn refill_worker(
     let picked = pick_diverse_candidates(
         filtered,
         &exclude,
+        &exclude_fps,
         &uploader_counts,
         &seed_artist,
         REFILL_BATCH,
+        Some(&ctx),
+        Some(&taste),
     );
 
     if picked.is_empty() {
@@ -129,12 +145,11 @@ fn refill_worker(
 fn fetch_genre_mix(
     cookies: &str,
     video: &Video,
-    last_search: &str,
+    ctx: &crate::discover::MusicContext,
     limit: usize,
 ) -> Result<Vec<Video>, String> {
-    let ctx = build_music_context(last_search, video);
     let items = youtube::fetch_mix(cookies, &video.id, limit)?;
-    Ok(filter_relevant(&ctx, items))
+    Ok(filter_relevant(ctx, items))
 }
 
 fn fetch_searches(

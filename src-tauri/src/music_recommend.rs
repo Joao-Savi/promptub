@@ -1,12 +1,12 @@
 //! Recomendacoes de musica com variedade por genero/artista (estilo YouTube Music).
 
 use crate::discover::{
-    artist_key, build_music_context, contextual_search_queries, cold_start_queries,
-    extract_artist_label, filter_playable, filter_relevant, interleave_sources,
-    peer_artists, pick_diverse_candidates, pick_new_artists,
+    artist_key, build_music_context_rich, contextual_search_queries,
+    cold_start_queries, extract_artist_label, filter_playable, filter_relevant,
+    interleave_sources, peer_artists, pick_diverse_candidates, pick_new_artists,
     refine_search_results,
 };
-use crate::history::WatchHistory;
+use crate::history::{TasteProfile, WatchHistory};
 use crate::youtube::{self, Video};
 use std::collections::{HashMap, HashSet};
 use std::thread;
@@ -68,17 +68,27 @@ fn parallel_fetch_searches_recent(cookies: &str, queries: &[String], per_query: 
     handles.into_iter().filter_map(|h| h.join().ok()).collect()
 }
 
+fn taste_ctx(history: &WatchHistory, last_search: &str, seed: &Video) -> (crate::discover::MusicContext, TasteProfile, HashSet<String>) {
+    let rich = history.listening_context(last_search, seed);
+    let ctx = build_music_context_rich(&rich, seed);
+    let fps = history.played_fingerprints();
+    (ctx, history.taste.clone(), fps)
+}
+
 pub fn build_recommended_row(
     cookies: &str,
     seed: &Option<Video>,
     last_search: &str,
+    history: &WatchHistory,
     prefer_br: bool,
     rotation: usize,
     query_cap: usize,
     seen: &mut HashSet<String>,
 ) -> Result<Vec<Video>, String> {
+    let exclude_fps = history.played_fingerprints();
+
     if let Some(s) = seed {
-        let ctx = build_music_context(last_search, s);
+        let (ctx, taste, exclude_fps) = taste_ctx(history, last_search, s);
         let queries: Vec<String> = contextual_search_queries(last_search, s, rotation)
             .into_iter()
             .take(query_cap)
@@ -89,8 +99,10 @@ pub fn build_recommended_row(
             .map(|items| filter_relevant(&ctx, items))
             .collect();
         if query_cap > 3 {
-            if let Ok(mix) = youtube::fetch_mix(cookies, &s.id, 8) {
-                sources.push(filter_relevant(&ctx, mix));
+            for peer in peer_artists(s, rotation + 1, 2) {
+                if let Ok(items) = youtube::fetch_search(cookies, &format!("{peer} musica"), 6) {
+                    sources.push(filter_relevant(&ctx, items));
+                }
             }
         }
 
@@ -98,10 +110,17 @@ pub fn build_recommended_row(
         let filtered = filter_relevant(&ctx, interleaved);
         let seed_artist = artist_key(s);
         let mut picked = pick_diverse_candidates(
-            filtered, seen, &HashMap::new(), &seed_artist, RECOMMENDED_LIMIT,
+            filtered,
+            seen,
+            &exclude_fps,
+            &HashMap::new(),
+            &seed_artist,
+            RECOMMENDED_LIMIT,
+            Some(&ctx),
+            Some(&taste),
         );
         if picked.is_empty() {
-            picked = cold_start_fallback(cookies, prefer_br, rotation, seen, query_cap.min(3))?;
+            picked = cold_start_fallback(cookies, prefer_br, rotation, seen, &exclude_fps, &taste, query_cap.min(3))?;
         }
         for v in &picked {
             seen.insert(v.id.clone());
@@ -114,7 +133,7 @@ pub fn build_recommended_row(
         let raw = youtube::fetch_search(cookies, ls, 10)?;
         let refined = refine_search_results(ls, raw);
         if let Some(s) = refined.first() {
-            let ctx = build_music_context(ls, s);
+            let (ctx, taste, exclude_fps) = taste_ctx(history, ls, s);
             let queries: Vec<String> = contextual_search_queries(ls, s, rotation)
                 .into_iter()
                 .take(query_cap.min(5))
@@ -128,12 +147,15 @@ pub fn build_recommended_row(
             let mut picked = pick_diverse_candidates(
                 filtered,
                 seen,
+                &exclude_fps,
                 &HashMap::new(),
                 &artist_key(s),
                 RECOMMENDED_LIMIT,
+                Some(&ctx),
+                Some(&taste),
             );
             if picked.is_empty() {
-                picked = cold_start_fallback(cookies, prefer_br, rotation, seen, query_cap.min(3))?;
+                picked = cold_start_fallback(cookies, prefer_br, rotation, seen, &exclude_fps, &taste, query_cap.min(3))?;
             }
             for v in &picked {
                 seen.insert(v.id.clone());
@@ -142,7 +164,7 @@ pub fn build_recommended_row(
         }
     }
 
-    cold_start_fallback(cookies, prefer_br, rotation, seen, query_cap)
+    cold_start_fallback(cookies, prefer_br, rotation, seen, &exclude_fps, &history.taste, query_cap)
 }
 
 /// Artistas do mesmo genero — 1 faixa por artista parecido.
@@ -150,6 +172,7 @@ pub fn build_peers_row(
     cookies: &str,
     seed: &Option<Video>,
     last_search: &str,
+    history: &WatchHistory,
     rotation: usize,
     peer_cap: usize,
     seen: &mut HashSet<String>,
@@ -158,7 +181,7 @@ pub fn build_peers_row(
         return Ok(vec![]);
     };
 
-    let ctx = build_music_context(last_search, s);
+    let (ctx, taste, exclude_fps) = taste_ctx(history, last_search, s);
     let peers: Vec<String> = peer_artists(s, rotation, peer_cap);
     let seed_artist = artist_key(s);
 
@@ -177,9 +200,12 @@ pub fn build_peers_row(
         let picked = pick_diverse_candidates(
             filtered,
             seen,
+            &exclude_fps,
             &HashMap::new(),
             &seed_artist,
             1,
+            Some(&ctx),
+            Some(&taste),
         );
         if let Some(v) = picked.into_iter().next() {
             seen.insert(v.id.clone());
@@ -194,6 +220,8 @@ fn cold_start_fallback(
     prefer_br: bool,
     rotation: usize,
     seen: &HashSet<String>,
+    exclude_fps: &HashSet<String>,
+    taste: &TasteProfile,
     max_queries: usize,
 ) -> Result<Vec<Video>, String> {
     let mut sources: Vec<Vec<Video>> = Vec::new();
@@ -218,9 +246,12 @@ fn cold_start_fallback(
     let picked = pick_diverse_candidates(
         interleaved,
         seen,
+        exclude_fps,
         &HashMap::new(),
         "",
         RECOMMENDED_LIMIT,
+        None,
+        Some(&taste),
     );
     Ok(picked)
 }
@@ -236,10 +267,11 @@ pub fn build_new_artists_row(
     seen: &mut HashSet<String>,
 ) -> Result<Vec<Video>, String> {
     let known = history.known_uploaders();
-    let mut sources: Vec<Vec<Video>> = Vec::new();
+    let exclude_fps = history.played_fingerprints();
+    let taste = &history.taste;
 
     if let Some(s) = seed {
-        let ctx = build_music_context(last_search, s);
+        let (ctx, taste, exclude_fps) = taste_ctx(history, last_search, s);
         let queries: Vec<String> = contextual_search_queries(last_search, s, rotation + 3)
             .into_iter()
             .take(query_take)
@@ -250,13 +282,14 @@ pub fn build_new_artists_row(
             .collect();
         let interleaved = interleave_sources(sources);
         let filtered = filter_relevant(&ctx, interleaved);
-        let picked = pick_new_artists(filtered, seen, &known, NEW_ARTISTS_LIMIT);
+        let picked = pick_new_artists(filtered, seen, &exclude_fps, &known, Some(&taste), NEW_ARTISTS_LIMIT);
         for v in &picked {
             seen.insert(v.id.clone());
         }
         return Ok(picked);
     }
 
+    let mut sources: Vec<Vec<Video>> = Vec::new();
     let queries: Vec<String> = cold_start_queries(prefer_br, rotation + 2)
         .into_iter()
         .take(query_take)
@@ -268,7 +301,7 @@ pub fn build_new_artists_row(
     );
 
     let interleaved = interleave_sources(sources);
-    let picked = pick_new_artists(interleaved, seen, &known, NEW_ARTISTS_LIMIT);
+    let picked = pick_new_artists(interleaved, seen, &exclude_fps, &known, Some(taste), NEW_ARTISTS_LIMIT);
     for v in &picked {
         seen.insert(v.id.clone());
     }
@@ -287,18 +320,18 @@ pub fn build_made_for_you_row(
     seen: &mut HashSet<String>,
 ) -> Result<Vec<Video>, String> {
     if history.recent_music.is_empty() {
-        return build_made_for_you_cold(cookies, seed, prefer_br, rotation, quick, seen);
+        return build_made_for_you_cold(cookies, seed, history, prefer_br, rotation, quick, seen);
     }
 
     let kw_take = if quick { 1 } else { 3 };
     let keywords = history.interest_keywords(6);
     let top = history.top_music(3);
     if top.is_empty() {
-        return build_made_for_you_cold(cookies, seed, prefer_br, rotation, quick, seen);
+        return build_made_for_you_cold(cookies, seed, history, prefer_br, rotation, quick, seen);
     }
 
     let mut sources: Vec<Vec<Video>> = Vec::new();
-    let ctx = build_music_context(last_search, &top[0]);
+    let (ctx, taste, exclude_fps) = taste_ctx(history, last_search, &top[0]);
 
     let kw_queries: Vec<String> = keywords
         .iter()
@@ -333,9 +366,12 @@ pub fn build_made_for_you_row(
     let picked = pick_diverse_candidates(
         filtered,
         seen,
+        &exclude_fps,
         &HashMap::new(),
         &artist_key(&top[0]),
         MADE_FOR_YOU_LIMIT,
+        Some(&ctx),
+        Some(&taste),
     );
     for v in &picked {
         seen.insert(v.id.clone());
@@ -346,20 +382,39 @@ pub fn build_made_for_you_row(
 fn build_made_for_you_cold(
     cookies: &str,
     seed: &Option<Video>,
+    history: &WatchHistory,
     prefer_br: bool,
     rotation: usize,
     quick: bool,
     seen: &mut HashSet<String>,
 ) -> Result<Vec<Video>, String> {
     let mut sources: Vec<Vec<Video>> = Vec::new();
+    let exclude_fps = history.played_fingerprints();
+    let taste = &history.taste;
 
     if let Some(s) = seed {
-        let ctx = build_music_context("", s);
+        let (ctx, taste, exclude_fps) = taste_ctx(history, "", s);
         for peer in peer_artists(s, rotation, if quick { 2 } else { 5 }) {
             if let Ok(items) = youtube::fetch_search(cookies, &format!("{peer} musica"), 4) {
                 sources.push(filter_relevant(&ctx, items));
             }
         }
+        let interleaved = interleave_sources(sources);
+        let seed_artist = artist_key(s);
+        let picked = pick_diverse_candidates(
+            interleaved,
+            seen,
+            &exclude_fps,
+            &HashMap::new(),
+            &seed_artist,
+            MADE_FOR_YOU_LIMIT,
+            Some(&ctx),
+            Some(&taste),
+        );
+        for v in &picked {
+            seen.insert(v.id.clone());
+        }
+        return Ok(picked);
     }
 
     for q in cold_start_queries(prefer_br, rotation + 1)
@@ -372,13 +427,15 @@ fn build_made_for_you_cold(
     }
 
     let interleaved = interleave_sources(sources);
-    let seed_artist = seed.as_ref().map(artist_key).unwrap_or_default();
     let picked = pick_diverse_candidates(
         interleaved,
         seen,
+        &exclude_fps,
         &HashMap::new(),
-        &seed_artist,
+        "",
         MADE_FOR_YOU_LIMIT,
+        None,
+        Some(taste),
     );
     for v in &picked {
         seen.insert(v.id.clone());
@@ -394,7 +451,11 @@ pub fn build_history_playlist(
     seed_query: Option<&str>,
     last_search: &str,
 ) -> Result<(Vec<Video>, String), String> {
-    let seen = history.played_ids();
+    let mut seen = history.played_ids();
+    for id in history.blocked_ids() {
+        seen.insert(id);
+    }
+
     let anchor = seed
         .or_else(|| history.music_seed())
         .or_else(|| {
@@ -420,7 +481,7 @@ pub fn build_history_playlist(
         .unwrap_or(0);
 
     let mut sources: Vec<Vec<Video>> = Vec::new();
-    let ctx = build_music_context(last_search, &anchor);
+    let (ctx, taste, exclude_fps) = taste_ctx(history, last_search, &anchor);
 
     for q in contextual_search_queries(last_search, &anchor, rotation).iter().take(6) {
         if let Ok(items) = youtube::fetch_search(cookies, q, 6) {
@@ -432,8 +493,10 @@ pub fn build_history_playlist(
             sources.push(filter_relevant(&ctx, items));
         }
     }
-    if let Ok(mix) = youtube::fetch_mix(cookies, &anchor.id, 8) {
-        sources.push(filter_relevant(&ctx, mix));
+    for peer in peer_artists(&anchor, rotation, 3) {
+        if let Ok(items) = youtube::fetch_search(cookies, &format!("{peer} musica"), 5) {
+            sources.push(filter_relevant(&ctx, items));
+        }
     }
 
     let interleaved = interleave_sources(sources);
@@ -441,9 +504,12 @@ pub fn build_history_playlist(
     let mut playlist = pick_diverse_candidates(
         filtered,
         &seen,
+        &exclude_fps,
         &HashMap::new(),
         &artist_key(&anchor),
         25,
+        Some(&ctx),
+        Some(&taste),
     );
 
     if playlist.is_empty() {

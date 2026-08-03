@@ -288,49 +288,86 @@ pub fn interleave_sources(sources: Vec<Vec<Video>>) -> Vec<Video> {
     out
 }
 
-/// Evita repetir artista/faixa — max 1 por artista por lote.
+/// Evita repetir artista/faixa — max 1 por artista por lote, com score de gosto.
 pub fn pick_diverse_candidates(
     candidates: Vec<Video>,
     exclude_ids: &HashSet<String>,
+    exclude_fingerprints: &HashSet<String>,
     queue_counts: &HashMap<String, usize>,
     seed_artist: &str,
     limit: usize,
+    ctx: Option<&MusicContext>,
+    taste: Option<&crate::history::TasteProfile>,
 ) -> Vec<Video> {
     let playable: Vec<Video> = filter_playable(candidates);
     let queue_len = queue_counts.values().sum::<usize>().max(1);
-    let mut batch_counts: HashMap<String, usize> = HashMap::new();
-    let mut out = Vec::new();
     let seed_key = normalize_uploader(seed_artist);
+
+    let mut scored: Vec<(i32, Video)> = Vec::new();
+    let mut batch_artists: HashMap<String, usize> = HashMap::new();
 
     for v in playable {
         if exclude_ids.contains(&v.id) {
             continue;
         }
-        let artist = artist_key(&v);
-        if artist.is_empty() {
-            out.push(v);
-            if out.len() >= limit {
-                break;
+        let fp = title_fingerprint(&v);
+        if exclude_fingerprints.contains(&fp) {
+            continue;
+        }
+
+        if let Some(t) = taste {
+            if t.is_blocked(&v) {
+                continue;
             }
-            continue;
         }
 
-        let in_queue = queue_counts.get(&artist).copied().unwrap_or(0);
-        let in_batch = batch_counts.get(&artist).copied().unwrap_or(0);
-        let max_batch = if !seed_key.is_empty() && artist == seed_key {
-            1
-        } else {
-            1
-        };
-        let queue_share = in_queue as f32 / queue_len as f32;
-        if queue_share > 0.25 && in_batch >= 1 {
-            continue;
-        }
-        if in_batch >= max_batch {
-            continue;
+        if let Some(c) = ctx {
+            if !is_relevant(c, &v) || has_cross_genre_conflict(c, &v) {
+                continue;
+            }
         }
 
-        batch_counts.insert(artist, in_batch + 1);
+        let artist = artist_key(&v);
+        if !artist.is_empty() {
+            let in_batch = batch_artists.get(&artist).copied().unwrap_or(0);
+            if in_batch >= 1 {
+                continue;
+            }
+            let in_queue = queue_counts.get(&artist).copied().unwrap_or(0);
+            let queue_share = in_queue as f32 / queue_len as f32;
+            if queue_share > 0.2 && artist != seed_key {
+                continue;
+            }
+            if !seed_key.is_empty() && artist == seed_key {
+                continue;
+            }
+        }
+
+        let mut score = ctx.map(|c| relevance_score(c, &v)).unwrap_or(0);
+        if let Some(t) = taste {
+            let st = t.state_for(&v);
+            match st {
+                crate::history::TasteState::Liked => score += 40,
+                crate::history::TasteState::Disliked => continue,
+                crate::history::TasteState::None => {}
+            }
+        }
+
+        scored.push((score, v));
+    }
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut out = Vec::new();
+    for (_, v) in scored {
+        let artist = artist_key(&v);
+        if !artist.is_empty() {
+            let in_batch = batch_artists.get(&artist).copied().unwrap_or(0);
+            if in_batch >= 1 {
+                continue;
+            }
+            batch_artists.insert(artist, 1);
+        }
         out.push(v);
         if out.len() >= limit {
             break;
@@ -343,7 +380,9 @@ pub fn pick_diverse_candidates(
 pub fn pick_new_artists(
     candidates: Vec<Video>,
     exclude_ids: &HashSet<String>,
+    exclude_fingerprints: &HashSet<String>,
     known_uploaders: &HashSet<String>,
+    taste: Option<&crate::history::TasteProfile>,
     limit: usize,
 ) -> Vec<Video> {
     let mut batch_counts: HashMap<String, usize> = HashMap::new();
@@ -353,6 +392,14 @@ pub fn pick_new_artists(
     for v in filter_playable(candidates) {
         if exclude_ids.contains(&v.id) {
             continue;
+        }
+        if exclude_fingerprints.contains(&title_fingerprint(&v)) {
+            continue;
+        }
+        if let Some(t) = taste {
+            if t.is_blocked(&v) {
+                continue;
+            }
         }
         let artist = artist_key(&v);
         if artist.is_empty() {
@@ -395,6 +442,39 @@ const NOISE_BLOCK: &[&str] = &[
     "podcast",
     "#shorts",
     "mc rick",
+];
+
+const NON_MUSIC_BLOCK: &[&str] = &[
+    "documentario",
+    "documentário",
+    "documentary",
+    "entrevista",
+    "interview",
+    "tutorial",
+    "review",
+    "trailer",
+    "filme",
+    "movie",
+    "episodio",
+    "episódio",
+    "episode",
+    "making of",
+    "behind the scenes",
+    "curiosidades",
+    "historia de",
+    "história de",
+    "biografia",
+    "aula",
+    "lecture",
+    "palestra",
+    "debate",
+    "noticias",
+    "notícias",
+    "news ",
+    "gameplay",
+    "walkthrough",
+    "vlog",
+    "unboxing",
 ];
 
 const GENERIC_UPLOADERS: &[&str] = &[
@@ -447,10 +527,22 @@ pub struct MusicContext {
     pub block_terms: Vec<String>,
 }
 
-pub fn build_music_context(last_search: &str, seed: &Video) -> MusicContext {
+pub fn title_fingerprint(v: &Video) -> String {
+    let artist = extract_artist_label(v);
+    let title_part = v
+        .title
+        .split_once(" - ")
+        .or_else(|| v.title.split_once(" | "))
+        .map(|(_, t)| t.trim())
+        .unwrap_or(v.title.trim());
+    let simplified = simplify_for_search(title_part);
+    format!("{}::{}", normalize_uploader(&artist), simplified)
+}
+
+pub fn build_music_context_rich(rich_context: &str, seed: &Video) -> MusicContext {
     let artist_label = extract_artist_label(seed);
     let artist_norm = normalize_uploader(&artist_label);
-    let rich = format!("{} {} {}", last_search, seed.title, artist_label);
+    let rich = format!("{rich_context} {} {artist_label}", seed.title);
     let mut genre_styles = expand_style_queries(&rich, 0);
     if genre_styles.is_empty() && infer_sertanejo(seed) {
         genre_styles = vec![
@@ -460,8 +552,12 @@ pub fn build_music_context(last_search: &str, seed: &Video) -> MusicContext {
             "modao sertanejo".into(),
         ];
     }
-    let mut block_terms: Vec<String> = NOISE_BLOCK.iter().map(|s| s.to_string()).collect();
-    let ls = last_search.trim().to_lowercase();
+    let mut block_terms: Vec<String> = NOISE_BLOCK
+        .iter()
+        .chain(NON_MUSIC_BLOCK.iter())
+        .map(|s| s.to_string())
+        .collect();
+    let ls = rich_context.trim().to_lowercase();
     if !ls.is_empty() && ls.len() <= 5 {
         block_terms.push("rock ".into());
         block_terms.push("⚡".into());
@@ -473,6 +569,10 @@ pub fn build_music_context(last_search: &str, seed: &Video) -> MusicContext {
         genre_styles,
         block_terms,
     }
+}
+
+pub fn build_music_context(last_search: &str, seed: &Video) -> MusicContext {
+    build_music_context_rich(last_search, seed)
 }
 
 pub fn infer_sertanejo(v: &Video) -> bool {
@@ -531,6 +631,66 @@ const BR_COLD: &[&str] = &[
     "axe music",
 ];
 
+fn primary_genre_triggers(context: &str) -> HashSet<String> {
+    let profiles = matched_profiles(context);
+    let mut triggers = HashSet::new();
+    for p in profiles.iter().take(2) {
+        for t in p.triggers {
+            triggers.insert(normalize_text(t));
+        }
+    }
+    triggers
+}
+
+/// Bloqueia faixas de genero diferente (ex.: rock no meio do sertanejo).
+pub fn has_cross_genre_conflict(ctx: &MusicContext, v: &Video) -> bool {
+    if ctx.genre_styles.is_empty() {
+        return false;
+    }
+    let rich = format!(
+        "{} {} {}",
+        ctx.artist_label,
+        ctx.genre_styles.join(" "),
+        ctx.artist_norm
+    );
+    let primary = primary_genre_triggers(&rich);
+    if primary.is_empty() {
+        return false;
+    }
+
+    let blob = normalize_text(&format!("{} {}", v.title, v.uploader));
+    for profile in GENRE_PROFILES {
+        let video_matches = profile
+            .triggers
+            .iter()
+            .any(|t| blob.contains(&normalize_text(t)));
+        if !video_matches {
+            continue;
+        }
+        let is_primary = profile
+            .triggers
+            .iter()
+            .any(|t| primary.contains(&normalize_text(t)));
+        if !is_primary {
+            return true;
+        }
+    }
+    false
+}
+
+fn query_duplicates_seed(query: &str, seed: &Video) -> bool {
+    let q = normalize_text(query);
+    let artist = normalize_text(&extract_artist_label(seed));
+    let title = normalize_text(&seed.title);
+    if artist.len() > 3 && q.contains(&artist) {
+        return true;
+    }
+    if title.len() > 5 && q.contains(&simplify_for_search(&title)) {
+        return true;
+    }
+    false
+}
+
 fn artists_match(a: &str, b: &str) -> bool {
     let a = normalize_uploader(a);
     let b = normalize_uploader(b);
@@ -561,18 +721,19 @@ pub fn contextual_search_queries(last_search: &str, seed: &Video, rotation: usiz
     let ctx = build_music_context(last_search, seed);
     let mut out = Vec::new();
 
-    out.extend(peer_artists(seed, rotation, 6));
-    out.extend(rotate_pick(&ctx.genre_styles, rotation, 4));
-
-    if ctx.artist_label.len() > 3 {
-        out.push(format!("{} musica", ctx.artist_label));
+    for peer in peer_artists(seed, rotation, 8) {
+        out.push(format!("{peer} musica"));
+    }
+    for style in rotate_pick(&ctx.genre_styles, rotation, 5) {
+        out.push(format!("{style} musica"));
     }
 
     let ls = last_search.trim();
-    if ls.len() >= 6 {
+    if ls.len() >= 8 && !query_duplicates_seed(ls, seed) {
         out.push(format!("{ls} musica"));
     }
 
+    out.retain(|q| !query_duplicates_seed(q, seed));
     out.sort();
     out.dedup();
     out
@@ -596,6 +757,14 @@ pub fn is_relevant(ctx: &MusicContext, v: &Video) -> bool {
         if blob.contains(block) {
             return false;
         }
+    }
+    for block in NON_MUSIC_BLOCK {
+        if blob.contains(block) {
+            return false;
+        }
+    }
+    if has_cross_genre_conflict(ctx, v) {
+        return false;
     }
     if ctx.genre_styles.iter().any(|s| s.contains("sertanejo")) {
         if blob.contains("rock classic") || blob.contains("rock 2000") || blob.contains("⚡") {

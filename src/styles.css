@@ -858,6 +858,22 @@ body::before {
   color: var(--text);
 }
 
+.ctrl-taste {
+  font-size: 0.85rem;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+}
+
+.ctrl-taste.active-like {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.ctrl-taste.active-dislike {
+  color: #c44;
+  border-color: #c44;
+}
+
 .progress-wrap {
   display: flex;
   align-items: center;

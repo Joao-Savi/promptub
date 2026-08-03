@@ -75,6 +75,7 @@ applyTheme(currentTheme());
 
 let loggedIn = false;
 let lastVideoId = null;
+let currentVideo = null;
 let currentPlaylistItems = [];
 let feedCache = null;
 let feedFetchId = 0;
@@ -159,12 +160,36 @@ function updatePlayButton() {
 
 function updateNowPlaying(video) {
   lastVideoId = video.id;
+  currentVideo = video;
   if (npTitle) npTitle.textContent = video.title;
   if (npThumb) {
     npThumb.src = thumbUrl(video);
     npThumb.classList.remove("hidden");
   }
   scheduleLyricsLoad(video);
+  void refreshTasteButtons();
+}
+
+function setTasteUi(state) {
+  const btnLike = $("btn-like");
+  const btnDislike = $("btn-dislike");
+  btnLike?.classList.toggle("active-like", state === "liked");
+  btnDislike?.classList.toggle("active-dislike", state === "disliked");
+  btnLike?.setAttribute("aria-pressed", state === "liked" ? "true" : "false");
+  btnDislike?.setAttribute("aria-pressed", state === "disliked" ? "true" : "false");
+}
+
+async function refreshTasteButtons() {
+  if (!currentVideo) {
+    setTasteUi("none");
+    return;
+  }
+  try {
+    const status = await tauriInvoke("taste_get", { video: currentVideo });
+    setTasteUi(status?.state || "none");
+  } catch (_) {
+    setTasteUi("none");
+  }
 }
 
 function scheduleLyricsLoad(video) {
@@ -1085,6 +1110,30 @@ btnStop?.addEventListener("click", async () => {
 $("btn-next")?.addEventListener("click", () => void switchTrack("next"));
 
 $("btn-prev")?.addEventListener("click", () => void switchTrack("prev"));
+
+$("btn-like")?.addEventListener("click", async () => {
+  if (!currentVideo) return;
+  try {
+    const status = await tauriInvoke("taste_like", { video: currentVideo });
+    setTasteUi(status?.state || "liked");
+    setStatus("gostei · fila personalizada");
+  } catch (e) {
+    setStatus(String(e));
+  }
+});
+
+$("btn-dislike")?.addEventListener("click", async () => {
+  if (!currentVideo) return;
+  try {
+    const status = await tauriInvoke("taste_dislike", { video: currentVideo });
+    setTasteUi(status?.state || "disliked");
+    setStatus("nao gostei · removido da fila");
+    await refreshQueue();
+    await switchTrack("next");
+  } catch (e) {
+    setStatus(String(e));
+  }
+});
 
 $("btn-clear-queue")?.addEventListener("click", async () => {
   try {

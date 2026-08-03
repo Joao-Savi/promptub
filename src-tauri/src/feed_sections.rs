@@ -44,18 +44,21 @@ pub fn build_section(
     for id in history.played_ids() {
         seen.insert(id);
     }
+    for id in history.blocked_ids() {
+        seen.insert(id);
+    }
 
     match section {
         "recommended" => {
             let cap = if essential { 2 } else { 3 };
             music_recommend::build_recommended_row(
-                cookies, &seed, last_search, prefer_br, rotation, cap, &mut seen,
+                cookies, &seed, last_search, history, prefer_br, rotation, cap, &mut seen,
             )
         }
         "peers" => {
             let cap = if essential { 3 } else { 5 };
             music_recommend::build_peers_row(
-                cookies, &seed, last_search, rotation, cap, &mut seen,
+                cookies, &seed, last_search, history, rotation, cap, &mut seen,
             )
         }
         "new_artists" => {

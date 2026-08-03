@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.0] — 2026-08-03
+
+### Algoritmo da fila e gosto
+- **Antes:** fila repetia mesma faixa/artista; podia misturar generos; sem preferencias explicitas
+- **Agora:** like/dislike (♥/✕) na barra do player; fila usa genero, artistas parecidos e historico; bloqueia nao-musica e generos fora do contexto; deduplica por titulo normalizado
+
+---
+
 ## [0.4.3] — 2026-08-03
 
 ### Atalho desktop
