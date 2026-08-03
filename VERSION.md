@@ -1,0 +1,28 @@
+# Versionamento do promptub
+
+SemVer: `MAJOR.MINOR.PATCH`
+
+| Parte | Quando subir |
+|-------|----------------|
+| **MAJOR** | Mudança grande, quebra compatibilidade (ex.: 0.x → 1.0) |
+| **MINOR** | Funcionalidade nova (feed progressivo, letras, temas) |
+| **PATCH** | Correção, performance, UI, segurança |
+
+## Onde atualizar ao lançar
+
+- `src-tauri/Cargo.toml`
+- `src-tauri/tauri.conf.json`
+- `package.json`
+- `INSTALAR.cmd` → `WANT`
+- `CHANGELOG.md`
+
+## Versão atual: **0.4.2**
+
+| Versão | Tipo | Resumo |
+|--------|------|--------|
+| **0.4.2** | PATCH | Tema dia mono; ícone vermelho; botão tema na barra |
+| **0.4.1** | PATCH | Tema vermelho; instalador limpo; segurança |
+| **0.4.0** | MINOR | HTML5, feed progressivo, sem mpv |
+| **0.3.x** | — | Era mpv + verde + vídeo (ver CHANGELOG) |
+
+Detalhes completos: [CHANGELOG.md](CHANGELOG.md)

@@ -1,24 +1,24 @@
+mod lyrics;
 mod auth;
 mod deps;
 mod discover;
+mod feed_cache;
+mod feed_sections;
 mod history;
-mod ipc;
 mod player;
 mod queue;
 mod queue_refill;
+mod music_recommend;
 mod recommend;
 mod state;
 mod stream;
 mod text;
-mod video_discover;
-mod video_recommend;
-mod video_embed;
 mod youtube;
 
 use state::{AppState, SharedState};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Manager, RunEvent};
 
 fn run_test_search(query: &str) -> ! {
     deps::init_bundled_tools(None);
@@ -49,15 +49,6 @@ fn init_tools(handle: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn boot_mode() -> String {
-    if std::env::args().any(|a| a == "--screenshot-video") {
-        "video".into()
-    } else {
-        "music".into()
-    }
-}
-
-#[tauri::command]
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
@@ -85,8 +76,6 @@ pub fn run() {
                     let history = state.watch_history.lock().clone();
                     history::hydrate_state(&state, &history);
                 }
-                let watch_state = state.clone();
-                std::thread::spawn(move || player::watch_end_events(watch_state));
 
                 if let Some(window) = app.get_webview_window("main") {
                     let win = window.clone();
@@ -99,49 +88,20 @@ pub fn run() {
                 Ok(())
             }
         })
-        .on_window_event({
-            let state = state.clone();
-            move |window, event| {
-                if window.label() != "main" {
-                    return;
-                }
-                match event {
-                    WindowEvent::CloseRequested { .. } => {
-                        player::shutdown_player(&state);
-                    }
-                    WindowEvent::Focused(focused) => {
-                        if !focused {
-                            crate::video_embed::set_host_visible(false);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        })
         .invoke_handler(tauri::generate_handler![
-            boot_mode,
             app_version,
             deps::check_deps,
             youtube::search,
             youtube::resolve_video,
-            youtube::related,
-            youtube::video_context_feed,
-            youtube::home_recommendations,
+            feed_cache::get_stored_feed,
+            feed_cache::save_stored_feed,
+            feed_sections::home_feed_local,
+            feed_sections::home_feed_section,
             recommend::recommended_playlist,
-            player::warmup,
             player::resolve_stream,
-            player::prewarm_streams,
             player::play,
-            player::stop,
             player::next,
             player::prev,
-            player::get_volume,
-            player::set_volume,
-            player::sync_video_panel,
-            player::set_video_overlay_visible,
-            player::hide_video_panel,
-            player::get_video_quality,
-            player::set_video_quality,
             player::prewarm_playlist,
             player::prewarm_status,
             queue::enqueue,
@@ -153,15 +113,12 @@ pub fn run() {
             auth::is_logged_in,
             auth::login,
             auth::logout,
-            auth::has_premium_session,
+            lyrics::fetch_lyrics_cmd,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri");
 
-    let state_exit = state.clone();
-    app.run(move |_app, event| {
-        if let RunEvent::Exit = event {
-            player::shutdown_player(&state_exit);
-        }
+    app.run(|_app, event| {
+        if let RunEvent::Exit = event {}
     });
 }

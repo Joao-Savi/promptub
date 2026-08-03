@@ -34,11 +34,9 @@ function Install-TrustedTool {
     Write-Host "Instalando $ExeName via winget (reputacao Microsoft, SAC-friendly)..." -ForegroundColor Cyan
     $wingetArgs = @(
         "install", "--id", $WingetId, "-e",
-        "--accept-source-agreements", "--accept-package-agreements"
+        "--accept-source-agreements", "--accept-package-agreements",
+        "--scope", "user"
     )
-    if ($ExeName -ne "mpv") {
-        $wingetArgs += "--scope", "user"
-    }
     & winget @wingetArgs
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {
         Write-Host "winget retornou $LASTEXITCODE para $WingetId (pode ja estar instalado)." -ForegroundColor DarkGray
@@ -69,7 +67,20 @@ Write-Host "Smart App Control: $sacLabel" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Dependencias no PATH (prioridade sobre tools/ embutidos):" -ForegroundColor White
 Install-TrustedTool -WingetId "yt-dlp.yt-dlp" -ExeName "yt-dlp"
-Install-TrustedTool -WingetId "shinchiro.mpv" -ExeName "mpv"
+
+$ToolsDir = Join-Path $InstallDir "tools"
+if (Test-Path $ToolsDir) {
+    Get-ChildItem $ToolsDir -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -ne "yt-dlp.exe"
+    } | Remove-Item -Force -ErrorAction SilentlyContinue
+    Write-Host "Pasta tools/ limpa (somente yt-dlp)." -ForegroundColor DarkGray
+}
+
+$WebViewData = Join-Path $env:LOCALAPPDATA "com.promptub"
+if (Test-Path $WebViewData) {
+    Write-Host "Limpando cache WebView2..." -ForegroundColor Cyan
+    Remove-Item -LiteralPath $WebViewData -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 $Exe = @(
     Join-Path $InstallDir "promptub.exe"
@@ -94,7 +105,7 @@ try {
     Write-Host $_.Exception.Message -ForegroundColor Yellow
     Write-Host ""
     Write-Host "Com SAC ativo, builds locais sem assinatura podem ser bloqueados." -ForegroundColor Yellow
-    Write-Host "O app usa yt-dlp/mpv do winget quando disponiveis (nao desativa a seguranca)." -ForegroundColor DarkGray
+    Write-Host "O app usa yt-dlp do winget ou embutido (nao desativa a seguranca)." -ForegroundColor DarkGray
     Write-Host "Se antes funcionava: reinstale por cima SEM apagar a pasta, ou use release assinada." -ForegroundColor DarkGray
     Read-Host "Enter para sair"
     exit 1

@@ -1,29 +1,97 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="night">
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>promptub · readme</title>
-    <link rel="stylesheet" href="/src/styles.css" />
+    <title>promptub · audio</title>
+    <style id="theme-core">
+      :root,
+      html[data-theme="night"] {
+        color-scheme: dark;
+        --bg: #0a0a0a;
+        --bg-elevated: #141010;
+        --bg-highlight: #221a1a;
+        --bg-card: #181414;
+        --text: #ffcccc;
+        --text-prose: #ffd6d6;
+        --muted: #a06060;
+        --accent: #ff2222;
+        --accent-dim: #cc1111;
+        --accent-hover: #ff4444;
+        --accent-deep: #661111;
+        --accent-rgb: 255, 34, 34;
+        --border: #662222;
+        --sidebar: #080505;
+        --main-gradient-top: #1a0a0a;
+        --glow: 0 0 10px rgba(255, 34, 34, 0.35);
+        --md-code-bg: rgba(255, 34, 34, 0.1);
+        --accent-on: #000;
+        --scanline-opacity: 0.35;
+        --overlay-bg: rgba(0, 0, 0, 0.78);
+      }
+      html[data-theme="day"] {
+        color-scheme: light;
+        --bg: #f3f3f3;
+        --bg-elevated: #fafafa;
+        --bg-highlight: #e8e8e8;
+        --bg-card: #ffffff;
+        --text: #1a1a1a;
+        --text-prose: #2b2b2b;
+        --muted: #6b6b6b;
+        --accent: #1a1a1a;
+        --accent-dim: #333333;
+        --accent-hover: #000000;
+        --accent-deep: #0d0d0d;
+        --accent-rgb: 26, 26, 26;
+        --border: #cccccc;
+        --sidebar: #e6e6e6;
+        --main-gradient-top: #f8f8f8;
+        --glow: 0 0 6px rgba(0, 0, 0, 0.08);
+        --md-code-bg: rgba(0, 0, 0, 0.06);
+        --accent-on: #fff;
+        --scanline-opacity: 0.04;
+        --overlay-bg: rgba(243, 243, 243, 0.92);
+      }
+    </style>
+    <script>
+      (function () {
+        var t = localStorage.getItem("promptub-theme");
+        document.documentElement.setAttribute("data-theme", t === "day" ? "day" : "night");
+      })();
+    </script>
   </head>
-  <body>
+  <body class="mode-music">
     <div id="app">
       <aside class="sidebar-left terminal-panel">
         <div class="term-header"><span class="term-dots">●●●</span>SYS/NAV</div>
-        <div class="logo">promptub<span class="logo-cursor"></span></div>
-        <p id="premium-badge" class="badge">MODO GRATUITO</p>
-        <nav class="tabs">
-          <button class="tab active" data-mode="music">audio.sys</button>
-          <button class="tab" data-mode="video">video.sys</button>
+        <button type="button" id="btn-logo-home" class="logo logo-btn" title="Atualizar feed com base no seu gosto">
+          promptub<span class="logo-cursor"></span>
+        </button>
+        <p id="premium-badge" class="badge">modo gratuito</p>
+        <p id="theme-badge" class="badge mode-badge">audio.sys · noite</p>
+
+        <nav class="nav">
+          <button type="button" id="btn-nav-home" class="nav-item active">
+            <span class="nav-icon">›</span> inicio
+          </button>
         </nav>
-        <button id="btn-premium" class="btn-secondary">[ AUTH ] PREMIUM</button>
+
+        <section class="lyrics-panel" aria-label="Letra da musica">
+          <div class="term-header lyrics-header"><span class="term-dots">●●●</span>LYRICS.SYS</div>
+          <p id="lyrics-track" class="lyrics-track muted">_aguardando faixa</p>
+          <div id="lyrics-scroll" class="lyrics-scroll">
+            <p class="lyrics-placeholder muted">Toque uma musica para ver a letra.</p>
+          </div>
+        </section>
+
+        <button id="btn-premium" class="btn-secondary">[ AUTH ] premium</button>
       </aside>
 
       <main class="main">
         <div class="main-inner md-prose">
           <div class="term-header"><span class="term-dots">●●●</span>MAIN // TTY1</div>
-          <p class="md-filepath" id="md-filepath"><code>promptub</code> / <code id="md-filename">README.md</code></p>
+          <p class="md-filepath" id="md-filepath"><code>promptub</code> / <code>README.md</code></p>
 
           <header class="search-header">
             <input
@@ -31,135 +99,129 @@
               type="text"
               autocomplete="off"
               spellcheck="false"
-              placeholder="_buscar no youtube..."
+              placeholder="_buscar musica... (Enter)"
               tabindex="1"
             />
-            <button id="btn-search" class="btn-primary">[ BUSCAR ]</button>
-            <button id="btn-rec-playlist" class="btn-accent music-only" title="Montar playlist com base no seu gosto">[ REC.PL ]</button>
-            <button id="btn-refresh-rec" class="btn-accent video-only hidden" title="Atualizar feed">[ ATUALIZAR ]</button>
+            <button id="btn-search" class="btn-accent" title="Buscar">[ BUSCAR ]</button>
+            <button id="btn-rec-playlist" class="btn-accent" title="Montar playlist com base no seu gosto">
+              [ REC.PL ]
+            </button>
           </header>
 
-          <div id="video-shell" class="video-shell hidden">
-            <div id="video-feed-scroll" class="video-feed-scroll">
-              <div id="video-player-block" class="video-player-block hidden">
-                <section id="panel-video">
-                  <div class="video-stage-header">▶ REPRODUZINDO</div>
-                  <div id="video-stage" class="video-stage">
-                    <video id="html-video" class="html-video" playsinline preload="metadata"></video>
-                    <div id="video-play-hint" class="video-play-hint hidden" aria-hidden="true">▶</div>
-                  </div>
-                  <div id="video-np-bar" class="video-np-bar hidden">
-                    <h3 id="video-np-title" class="video-np-title"></h3>
-                    <p id="video-np-meta" class="video-np-meta"></p>
-                  </div>
-                </section>
-              </div>
-
-              <div class="video-feed-toolbar">
-                <button type="button" id="btn-back-home-feed" class="btn-accent hidden" title="Voltar ao feed inicial">
-                  [ FEED INICIAL ]
-                </button>
-                <span id="video-feed-mode-label" class="video-feed-mode-label muted">explorar</span>
-              </div>
-
-              <div id="video-home-feed">
-                  <section id="panel-channel-news" class="hidden video-section">
-                    <div class="video-section-head">
-                      <h2>Novidades dos seus canais</h2>
-                      <p id="channel-news-subtitle" class="muted">uploads recentes</p>
-                    </div>
-                    <div id="channel-news-results" class="yt-grid"></div>
-                  </section>
-
-                  <section id="panel-feed" class="hidden video-section">
-                    <div class="video-section-head">
-                      <h2>Feed</h2>
-                      <p id="feed-subtitle" class="muted">para voce</p>
-                    </div>
-                    <div id="feed-results" class="yt-grid"></div>
-                  </section>
-
-                  <section id="panel-recommended" class="hidden video-section">
-                    <div class="video-section-head">
-                      <h2>Para voce</h2>
-                      <p id="recommended-subtitle" class="muted">carregando...</p>
-                    </div>
-                    <div id="recommended" class="yt-grid"></div>
-                  </section>
-
-                  <section id="panel-live" class="hidden video-section">
-                    <div class="video-section-head">
-                      <h2>Ao vivo</h2>
-                      <p class="muted">transmissoes em andamento</p>
-                    </div>
-                    <div id="live-results" class="yt-grid"></div>
-                  </section>
-                </div>
-
-                <section id="panel-video-context" class="hidden video-section">
-                  <div class="video-section-head">
-                    <h2>Relacionados</h2>
-                    <p id="video-context-subtitle" class="muted">carregando...</p>
-                  </div>
-                  <div id="video-context-results" class="yt-grid"></div>
-                </section>
-
-                <section id="panel-results-video" class="hidden video-section">
-                  <h2>Resultados da busca</h2>
-                  <div id="results-video" class="yt-grid"></div>
-                </section>
-            </div>
-          </div>
-
           <div id="music-shell" class="music-shell">
-          <section id="panel-results" class="hidden">
-            <h2 id="results-title">Resultados</h2>
-            <div id="results" class="grid"></div>
-          </section>
+            <section id="panel-results" class="panel hidden">
+              <h2 id="results-title">Resultados</h2>
+              <div id="results" class="grid"></div>
+            </section>
 
-          <section id="panel-rec-music" class="hidden">
-            <div class="section-header">
-              <div>
-                <h2>Recomendados</h2>
-                <p id="recommended-subtitle-music" class="muted">carregando recomendados...</p>
+            <section id="panel-feed-home" class="panel hidden feed-home">
+              <section id="panel-continue" class="feed-section hidden">
+                <div class="section-header">
+                  <div>
+                    <h2>Continuar ouvindo</h2>
+                    <p id="continue-subtitle" class="muted">do seu historico local</p>
+                  </div>
+                  <button id="btn-play-continue-row" class="btn-accent">[ PLAY ]</button>
+                  <button id="btn-queue-continue-row" class="btn-accent">[ +FILA ]</button>
+                </div>
+                <div id="continue-music" class="feed-row"></div>
+              </section>
+
+              <section id="panel-rec-music" class="feed-section">
+                <div class="section-header">
+                  <div>
+                    <h2>Recomendados</h2>
+                    <p id="recommended-subtitle-music" class="muted">carregando…</p>
+                  </div>
+                  <button id="btn-play-rec-row" class="btn-accent" title="Tocar fila">[ PLAY ]</button>
+                  <button id="btn-queue-rec-row" class="btn-accent" title="Adicionar fila">[ +FILA ]</button>
+                  <button id="btn-refresh-rec-music" class="btn-accent">[ ATUALIZAR ]</button>
+                </div>
+                <div id="recommended-music" class="feed-row"></div>
+              </section>
+
+              <section id="panel-genre-peers" class="feed-section">
+                <div class="section-header">
+                  <div>
+                    <h2>Artistas do genero</h2>
+                    <p id="genre-peers-subtitle" class="muted">duplas e artistas parecidos</p>
+                  </div>
+                  <button id="btn-play-peers-row" class="btn-accent">[ PLAY ]</button>
+                  <button id="btn-queue-peers-row" class="btn-accent">[ +FILA ]</button>
+                </div>
+                <div id="genre-peers-music" class="feed-row"></div>
+              </section>
+
+              <section id="panel-most-played" class="feed-section hidden">
+                <div class="section-header">
+                  <div>
+                    <h2>Mais tocadas</h2>
+                    <p id="most-played-subtitle" class="muted">seu historico local</p>
+                  </div>
+                  <button id="btn-play-most-row" class="btn-accent">[ PLAY ]</button>
+                  <button id="btn-queue-most-row" class="btn-accent">[ +FILA ]</button>
+                </div>
+                <div id="most-played-music" class="feed-row"></div>
+              </section>
+
+              <section id="panel-new-artists" class="feed-section">
+                <div class="section-header">
+                  <div>
+                    <h2>Descobertas</h2>
+                    <p id="new-artists-subtitle" class="muted">novidades · artistas diferentes</p>
+                  </div>
+                  <button id="btn-play-new-row" class="btn-accent">[ PLAY ]</button>
+                  <button id="btn-queue-new-row" class="btn-accent">[ +FILA ]</button>
+                </div>
+                <div id="new-artists-music" class="feed-row"></div>
+              </section>
+
+              <section id="panel-history-mix" class="feed-section">
+                <div class="section-header">
+                  <div>
+                    <h2>Feito pra voce</h2>
+                    <p id="history-mix-subtitle" class="muted">playlist do seu gosto · carregando…</p>
+                  </div>
+                  <button id="btn-play-history-row" class="btn-accent">[ PLAY ]</button>
+                  <button id="btn-queue-history-row" class="btn-accent">[ +FILA ]</button>
+                  <button id="btn-open-history-pl" class="btn-primary">[ REC.PL ]</button>
+                </div>
+                <div id="history-mix-music" class="feed-row"></div>
+              </section>
+            </section>
+
+            <section id="panel-playlist" class="panel hidden">
+              <div class="playlist-header">
+                <div>
+                  <h2 id="playlist-title">Playlist recomendada</h2>
+                  <p id="playlist-subtitle" class="muted"></p>
+                </div>
+                <button id="btn-playlist-to-queue" class="btn-primary hidden">[ +FILA ]</button>
               </div>
-              <button id="btn-refresh-rec-music" class="btn-accent" title="Buscar recomendados">[ ATUALIZAR ]</button>
-            </div>
-            <div id="recommended-music" class="grid"></div>
-          </section>
+              <div id="playlist-results" class="grid"></div>
+            </section>
 
-          <section id="panel-playlist" class="hidden">
-            <div class="playlist-header">
-              <div>
-                <h2 id="playlist-title">Playlist recomendada</h2>
-                <p id="playlist-subtitle" class="muted"></p>
-              </div>
-              <button id="btn-playlist-to-queue" class="btn-primary hidden">[ +FILA ]</button>
-            </div>
-            <div id="playlist-results" class="grid"></div>
-          </section>
-
-          <section id="panel-welcome" class="md-doc">
-            <pre class="welcome-ascii" aria-hidden="true"><code>╔══════════════════════════════════════╗
-║  PROMPTUB v0.3.1  //  HTML5 VIDEO    ║
-║  stream: yt-dlp · audio: mpv         ║
+            <section id="panel-welcome" class="panel md-doc">
+              <pre class="welcome-ascii" aria-hidden="true"><code>╔══════════════════════════════════════╗
+║  PROMPTUB v0.4.2  //  TERMINAL         ║
+║  player: HTML5 · stream: yt-dlp      ║
 ╚══════════════════════════════════════╝</code></pre>
-            <h2 id="welcome-title">Bem-vindo</h2>
-            <p id="welcome-text" class="muted">
-              Player de stream estilo terminal — documentação embutida no app.
-            </p>
-            <ul class="md-list" id="welcome-list">
-              <li>Digite uma query acima e pressione <code>Enter</code></li>
-              <li>Use <code>audio.sys</code> para música ou <code>video.sys</code> para vídeo</li>
-              <li>Clique no vídeo para pausar / retomar</li>
-            </ul>
-          </section>
+              <h2 id="welcome-title">Bem-vindo</h2>
+              <p id="welcome-text" class="muted">
+                Player de musica leve — tudo roda <strong>dentro do app</strong>, sem dependencias externas de player.
+              </p>
+              <ul class="md-list" id="welcome-list">
+                <li>Digite uma query e pressione <code>Enter</code></li>
+                <li>Monte playlists com <code>[ REC.PL ]</code></li>
+                <li>Atalhos visiveis na barra inferior do player</li>
+              </ul>
+            </section>
           </div>
         </div>
       </main>
 
       <aside id="queue-panel" class="queue-panel terminal-panel">
-        <div class="term-header"><span class="term-dots">●●●</span><span id="right-panel-label">QUEUE.SYS</span></div>
+        <div class="term-header"><span class="term-dots">●●●</span>QUEUE.SYS</div>
         <div class="queue-header">
           <h2 id="queue-title">Fila</h2>
           <button id="btn-clear-queue" class="btn-icon" title="Limpar fila">CLR</button>
@@ -172,36 +234,48 @@
           <img id="np-thumb" class="np-thumb hidden" alt="" />
           <div class="np-info">
             <span id="np-title">_idle — aguardando stream</span>
-            <span id="np-mode" class="np-mode">AUDIO.SYS</span>
+            <span id="np-mode" class="np-mode">WEB · audio</span>
           </div>
         </div>
-        <div class="controls">
-          <button id="btn-prev" title="Anterior">&lt;&lt;</button>
-          <button id="btn-stop" title="Parar">[||]</button>
-          <button id="btn-next" title="Próximo">&gt;&gt;</button>
+
+        <div class="player-center">
+          <div class="controls">
+            <button id="btn-prev" class="ctrl-btn" title="Anterior">⏮</button>
+            <button id="btn-stop" class="ctrl-btn ctrl-main" title="Pausar">⏸</button>
+            <button id="btn-next" class="ctrl-btn" title="Próximo">⏭</button>
+          </div>
+          <div class="progress-wrap">
+            <span id="time-current" class="time-label">0:00</span>
+            <input type="range" id="progress-slider" min="0" max="100" value="0" />
+            <span id="time-total" class="time-label">0:00</span>
+          </div>
         </div>
+
         <div class="volume-control" title="Volume">
           <span class="volume-label">VOL</span>
           <input type="range" id="volume-slider" min="0" max="100" value="100" />
         </div>
-        <div id="quality-control" class="quality-control hidden" title="Qualidade do video">
-          <span class="quality-label">QUAL</span>
-          <select id="quality-select" class="quality-select">
-            <option value="360">360p</option>
-            <option value="480">480p</option>
-            <option value="720" selected>720p</option>
-            <option value="1080">1080p</option>
-            <option value="best">MAX</option>
-          </select>
-        </div>
         <span id="status" class="status"></span>
+        <div class="player-tools">
+          <div class="kbd-shortcuts" aria-label="Atalhos de teclado">
+            <kbd>Espaço</kbd> pausar/tocar
+            <kbd>Ctrl</kbd>+<kbd>→</kbd> proxima
+            <kbd>Ctrl</kbd>+<kbd>←</kbd> anterior
+            <kbd>↑</kbd> volume +
+            <kbd>↓</kbd> volume −
+          </div>
+          <button id="btn-theme" class="btn-theme-mini" type="button" title="Alternar tema dia/noite">dia</button>
+        </div>
       </footer>
     </div>
+
+    <audio id="html-audio" preload="metadata"></audio>
+
     <div id="loading-overlay" class="loading-overlay hidden" aria-live="polite" aria-busy="false">
       <div class="loading-box">
         <div class="loading-spinner" aria-hidden="true"></div>
         <p id="loading-text">CARREGANDO...</p>
-        <p id="loading-hint" class="loading-hint">buscando no youtube via yt-dlp</p>
+        <p id="loading-hint" class="loading-hint">resolvendo stream via yt-dlp</p>
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>

@@ -1,4 +1,4 @@
-use crate::player::play_cached;
+use crate::player;
 use crate::queue_refill;
 use crate::state::SharedState;
 use crate::youtube::Video;
@@ -187,13 +187,10 @@ pub fn play_queue_item(
     state: State<'_, SharedState>,
     index: usize,
 ) -> Result<Option<Video>, String> {
-    let audio_only = *state.audio_only.lock();
     let video = state.queue.lock().jump_to(index);
     if let Some(ref v) = video {
-        state.set_last_video(v.clone(), audio_only);
-        play_cached(&state, v, audio_only)?;
-        crate::stream::prewarm_queue_ahead(&state);
-        queue_refill::maybe_refill_queue(&state);
+        state.set_last_video(v.clone());
+        player::track_play(state.inner(), v);
     }
     Ok(video)
 }

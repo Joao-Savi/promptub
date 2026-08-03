@@ -23,7 +23,11 @@ $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = $Launcher
 $Shortcut.WorkingDirectory = (Split-Path $Launcher -Parent)
-$Shortcut.Description = "YouTube e YouTube Music - estilo Spotify"
+$Shortcut.Description = "YouTube e YouTube Music - promptub"
+$IconPath = Join-Path $Root "src-tauri\icons\icon.ico"
+if (Test-Path $IconPath) {
+    $Shortcut.IconLocation = "$IconPath,0"
+}
 $Shortcut.Save()
 
 Write-Host "Atalho criado: $ShortcutPath" -ForegroundColor Green

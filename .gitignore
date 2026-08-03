@@ -30,3 +30,6 @@ Thumbs.db
 *.log
 build-sac-toggle.log
 build-sac-toggle.err.log
+
+# Icon source (generated)
+src-tauri/icons/icon-source.png

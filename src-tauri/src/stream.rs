@@ -1,20 +1,30 @@
 use crate::deps::{find_ytdlp, utf8_cmd};
 use crate::text::decode_bytes;
-use crate::youtube::Video;
+use crate::youtube::{self, Video};
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CACHE_TTL: Duration = Duration::from_secs(45 * 60);
-pub const PREWARM_AHEAD: usize = 4;
+const DISK_CACHE_TTL_SECS: u64 = 45 * 60;
+const DISK_CACHE_MAX: usize = 48;
+pub const PREWARM_AHEAD: usize = 3;
 
 struct CachedStream {
     url: String,
     fetched: Instant,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DiskStreamEntry {
+    url: String,
+    saved_at: u64,
 }
 
 pub struct StreamCache {
@@ -26,7 +36,7 @@ pub struct StreamCache {
 impl StreamCache {
     pub fn new() -> Self {
         Self {
-            entries: Arc::new(Mutex::new(HashMap::new())),
+            entries: Arc::new(Mutex::new(load_disk_cache())),
             prewarm_total: Arc::new(AtomicUsize::new(0)),
             prewarm_done: Arc::new(AtomicUsize::new(0)),
         }
@@ -38,21 +48,24 @@ impl StreamCache {
         if entry.fetched.elapsed() > CACHE_TTL {
             return None;
         }
+        if !youtube::is_allowed_stream_url(&entry.url) {
+            return None;
+        }
         Some(entry.url.clone())
     }
 
     pub fn put(&self, video_id: String, url: String) {
+        if !youtube::is_allowed_stream_url(&url) {
+            return;
+        }
         self.entries.lock().insert(
             video_id,
             CachedStream {
-                url,
+                url: url.clone(),
                 fetched: Instant::now(),
             },
         );
-    }
-
-    pub fn remove(&self, video_id: &str) {
-        self.entries.lock().remove(video_id);
+        save_disk_cache(&self.entries.lock());
     }
 
     pub fn prewarm_status(&self) -> (usize, usize) {
@@ -62,13 +75,7 @@ impl StreamCache {
         )
     }
 
-    pub fn prewarm_async(
-        &self,
-        cookies: String,
-        items: Vec<Video>,
-        audio_only: bool,
-        quality: String,
-    ) {
+    pub fn prewarm_async(&self, cookies: String, items: Vec<Video>) {
         let batch: Vec<Video> = items.into_iter().take(PREWARM_AHEAD).collect();
         if batch.is_empty() {
             return;
@@ -80,24 +87,20 @@ impl StreamCache {
         let prewarm_done = Arc::clone(&self.prewarm_done);
 
         thread::spawn(move || {
-            for (i, video) in batch.iter().enumerate() {
-                if entries.lock().contains_key(&video.id) {
+            for (i, track) in batch.iter().enumerate() {
+                if entries.lock().contains_key(&track.id) {
                     prewarm_done.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
-                let result = if audio_only {
-                    resolve_stream_url(&cookies, video, true)
-                } else {
-                    resolve_stream_url_with_quality(&cookies, video, false, &quality)
-                };
-                if let Ok(url) = result {
+                if let Ok(url) = resolve_stream_url(&cookies, track) {
                     entries.lock().insert(
-                        video.id.clone(),
+                        track.id.clone(),
                         CachedStream {
                             url,
                             fetched: Instant::now(),
                         },
                     );
+                    save_disk_cache(&entries.lock());
                 }
                 prewarm_done.fetch_add(1, Ordering::Relaxed);
                 if i + 1 < batch.len() {
@@ -114,133 +117,12 @@ pub struct PrewarmStatus {
     pub total: usize,
 }
 
-pub fn resolve_stream_url(
-    cookies: &str,
-    video: &Video,
-    audio_only: bool,
-) -> Result<String, String> {
-    resolve_stream_url_with_quality(cookies, video, audio_only, "720")
+pub fn resolve_stream_url(cookies: &str, track: &Video) -> Result<String, String> {
+    run_ytdlp_stream(cookies, track, "youtube:player_client=android")
 }
 
-pub fn resolve_stream_url_with_quality(
-    cookies: &str,
-    video: &Video,
-    audio_only: bool,
-    quality: &str,
-) -> Result<String, String> {
-    if audio_only {
-        return run_ytdlp_stream(cookies, video, true, quality, "youtube:player_client=android");
-    }
-
-    let format = video_format_string(quality);
-
-    // ios + android em paralelo — primeiro que responder ganha.
-    if let Ok(url) = race_ytdlp_clients(
-        cookies,
-        video,
-        &format,
-        &[
-            "youtube:player_client=ios",
-            "youtube:player_client=android",
-        ],
-    ) {
-        return Ok(url);
-    }
-
-    for (fmt, client) in [
-        ("22/18", "youtube:player_client=ios"),
-        ("18", "youtube:player_client=android"),
-    ] {
-        if let Ok(url) = run_ytdlp_stream(cookies, video, false, fmt, client) {
-            return Ok(url);
-        }
-    }
-
-    run_ytdlp_stream(
-        cookies,
-        video,
-        false,
-        &format,
-        "youtube:player_client=web,default",
-    )
-}
-
-fn race_ytdlp_clients(
-    cookies: &str,
-    video: &Video,
-    format: &str,
-    clients: &[&str],
-) -> Result<String, String> {
-    use std::sync::mpsc;
-
-    let (tx, rx) = mpsc::channel();
-    let mut handles = Vec::with_capacity(clients.len());
-
-    for client in clients {
-        let tx = tx.clone();
-        let cookies = cookies.to_string();
-        let video = video.clone();
-        let format = format.to_string();
-        let client = client.to_string();
-        handles.push(thread::spawn(move || {
-            if let Ok(url) = run_ytdlp_stream(&cookies, &video, false, &format, &client) {
-                let _ = tx.send(url);
-            }
-        }));
-    }
-    drop(tx);
-
-    let deadline = Instant::now() + Duration::from_secs(18);
-    loop {
-        let wait = deadline
-            .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(250));
-        if wait.is_zero() {
-            break;
-        }
-        match rx.recv_timeout(wait) {
-            Ok(url) => return Ok(url),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-
-    for h in handles {
-        let _ = h.join();
-    }
-    Err("stream nao encontrado".into())
-}
-
-fn video_format_string(quality: &str) -> String {
-    let height = match quality {
-        "360" => 360,
-        "480" => 480,
-        "1080" => 1080,
-        "best" => 99999,
-        _ => 720,
-    };
-    format!(
-        "best[height<={height}][ext=mp4][acodec!=none][vcodec!=none][protocol^=http]/\
-         best[height<={height}][acodec!=none][vcodec!=none][protocol^=http]/\
-         best[ext=mp4][acodec!=none][vcodec!=none][protocol^=http]/\
-         22/18"
-    )
-}
-
-fn run_ytdlp_stream(
-    cookies: &str,
-    video: &Video,
-    audio_only: bool,
-    format: &str,
-    extractor_args: &str,
-) -> Result<String, String> {
+fn run_ytdlp_stream(cookies: &str, track: &Video, extractor_args: &str) -> Result<String, String> {
     let ytdlp = find_ytdlp().ok_or("yt-dlp nao encontrado")?;
-    let format = if audio_only {
-        "bestaudio[ext=m4a]/bestaudio/best".to_string()
-    } else {
-        format.to_string()
-    };
-
     let mut args = vec![
         "--quiet".into(),
         "--no-warnings".into(),
@@ -248,7 +130,7 @@ fn run_ytdlp_stream(
         "--encoding".into(),
         "utf-8".into(),
         "-f".into(),
-        format,
+        "bestaudio[ext=m4a]/bestaudio/best".into(),
         "-g".into(),
     ];
     if !cookies.is_empty() {
@@ -257,7 +139,7 @@ fn run_ytdlp_stream(
     }
     args.push("--extractor-args".into());
     args.push(extractor_args.into());
-    args.push(video.url.clone());
+    args.push(track.url.clone());
 
     let output = utf8_cmd(&ytdlp)
         .args(&args)
@@ -266,33 +148,96 @@ fn run_ytdlp_stream(
     if !output.status.success() {
         return Err(decode_bytes(&output.stderr).trim().to_string());
     }
-    pick_stream_url(&decode_bytes(&output.stdout), audio_only)
+    pick_stream_url(&decode_bytes(&output.stdout))
 }
 
-fn pick_stream_url(stdout: &str, audio_only: bool) -> Result<String, String> {
-    let urls: Vec<&str> = stdout
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with("http"))
-        .collect();
-    if urls.is_empty() {
-        return Err("URL de stream nao encontrada".into());
+fn pick_stream_url(stdout: &str) -> Result<String, String> {
+    for line in stdout.lines().map(str::trim) {
+        if youtube::is_allowed_stream_url(line) {
+            return Ok(line.to_string());
+        }
     }
-    if urls.len() == 1 || audio_only {
-        return Ok(urls[0].to_string());
-    }
-    // Progressive muxed de preferencia; se vier 2 linhas (video+audio DASH), falha clara.
-    Err("stream separado DASH — mude qualidade ou tente outro video".into())
+    Err("URL de stream nao encontrada ou dominio nao permitido".into())
 }
 
 pub fn prewarm_queue_ahead(state: &crate::state::SharedState) {
-    let audio_only = *state.audio_only.lock();
     let upcoming = state.queue.lock().upcoming_from_current(PREWARM_AHEAD);
     if upcoming.is_empty() {
         return;
     }
-    let quality = state.video_quality.lock().clone();
     state
         .stream_cache
-        .prewarm_async(state.cookies(), upcoming, audio_only, quality);
+        .prewarm_async(state.cookies(), upcoming);
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn stream_cache_path() -> PathBuf {
+    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+    PathBuf::from(base).join("promptub").join("stream_cache.json")
+}
+
+fn load_disk_cache() -> HashMap<String, CachedStream> {
+    let path = stream_cache_path();
+    let raw = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return HashMap::new(),
+    };
+    let disk: HashMap<String, DiskStreamEntry> = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return HashMap::new(),
+    };
+    let now = now_secs();
+    let mut out = HashMap::new();
+    for (id, entry) in disk {
+        if now.saturating_sub(entry.saved_at) > DISK_CACHE_TTL_SECS {
+            continue;
+        }
+        if !youtube::is_allowed_stream_url(&entry.url) {
+            continue;
+        }
+        out.insert(
+            id,
+            CachedStream {
+                url: entry.url,
+                fetched: Instant::now()
+                    - Duration::from_secs(now.saturating_sub(entry.saved_at)),
+            },
+        );
+    }
+    out
+}
+
+fn save_disk_cache(map: &HashMap<String, CachedStream>) {
+    let path = stream_cache_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let now = now_secs();
+    let mut disk: HashMap<String, DiskStreamEntry> = HashMap::new();
+    for (id, entry) in map.iter() {
+        if entry.fetched.elapsed() > CACHE_TTL {
+            continue;
+        }
+        let saved_at = now.saturating_sub(entry.fetched.elapsed().as_secs());
+        disk.insert(
+            id.clone(),
+            DiskStreamEntry {
+                url: entry.url.clone(),
+                saved_at,
+            },
+        );
+    }
+    let mut entries: Vec<_> = disk.into_iter().collect();
+    entries.sort_by(|a, b| b.1.saved_at.cmp(&a.1.saved_at));
+    entries.truncate(DISK_CACHE_MAX);
+    let trimmed: HashMap<String, DiskStreamEntry> = entries.into_iter().collect();
+    if let Ok(json) = serde_json::to_string(&trimmed) {
+        let _ = fs::write(path, json);
+    }
 }

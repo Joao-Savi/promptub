@@ -3,15 +3,12 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 static BUNDLED_YTDLP: OnceLock<Option<String>> = OnceLock::new();
-static BUNDLED_MPV: OnceLock<Option<String>> = OnceLock::new();
 
 pub fn init_bundled_tools(tools_dir: Option<PathBuf>) {
     let mut dirs: Vec<PathBuf> = tools_dir.into_iter().collect();
     dirs.extend(local_tool_dirs());
     let ytdlp = dirs.iter().find_map(|d| tool_in_dir(d, "yt-dlp"));
-    let mpv = dirs.iter().find_map(|d| tool_in_dir(d, "mpv"));
     let _ = BUNDLED_YTDLP.set(ytdlp);
-    let _ = BUNDLED_MPV.set(mpv);
 }
 
 fn local_tool_dirs() -> Vec<PathBuf> {
@@ -56,35 +53,13 @@ pub fn check_deps() -> Result<(), String> {
     find_ytdlp().ok_or_else(|| {
         "yt-dlp nao encontrado. Reinstale o promptub ou execute o instalador completo.".to_string()
     })?;
-    find_mpv().ok_or_else(|| {
-        "mpv nao encontrado. Reinstale o promptub ou execute o instalador completo.".to_string()
-    })?;
     Ok(())
 }
 
 pub fn find_ytdlp() -> Option<String> {
-    // Prefer PATH (winget/winget-like installs) — SAC trusts these more than bundled copies.
     which("yt-dlp")
         .or_else(|| bundled(BUNDLED_YTDLP.get()))
         .or_else(|| local_tool_dirs().iter().find_map(|d| tool_in_dir(d, "yt-dlp")))
-}
-
-pub fn find_mpv() -> Option<String> {
-    // Same order: system install first, bundled fallback for offline setups.
-    if let Some(p) = which("mpv") {
-        return Some(p);
-    }
-    for candidate in mpv_windows_paths() {
-        if Path::new(&candidate).exists() {
-            return Some(candidate);
-        }
-    }
-    if let Some(p) = bundled(BUNDLED_MPV.get()) {
-        return Some(p);
-    }
-    local_tool_dirs()
-        .iter()
-        .find_map(|d| tool_in_dir(d, "mpv"))
 }
 
 fn bundled(slot: Option<&Option<String>>) -> Option<String> {
@@ -106,25 +81,6 @@ fn which(name: &str) -> Option<String> {
     } else {
         Some(path)
     }
-}
-
-fn mpv_windows_paths() -> Vec<String> {
-    let mut paths = Vec::new();
-    if let Ok(pf) = std::env::var("ProgramFiles") {
-        paths.push(format!(r"{pf}\MPV Player\mpv.exe"));
-        paths.push(format!(r"{pf}\mpv\mpv.exe"));
-    }
-    paths
-}
-
-pub fn mpv_cmd(program: &str) -> Command {
-    let mut cmd = hidden_cmd(program);
-    if let Some(dir) = Path::new(program).parent() {
-        if dir.is_dir() {
-            cmd.current_dir(dir);
-        }
-    }
-    cmd
 }
 
 pub fn utf8_cmd(program: &str) -> Command {

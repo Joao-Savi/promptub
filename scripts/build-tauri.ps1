@@ -5,9 +5,13 @@ $env:CARGO_TARGET_DIR = Join-Path $Root "src-tauri\target"
 
 . (Join-Path $PSScriptRoot "setup-vs.ps1")
 
-Write-Host "Preparando ferramentas (yt-dlp + mpv)..." -ForegroundColor Cyan
+Write-Host "Preparando ferramentas (yt-dlp)..." -ForegroundColor Cyan
 & (Join-Path $PSScriptRoot "prepare-installer.ps1")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "Limpando dist e builds antigos do frontend..." -ForegroundColor Cyan
+Remove-Item (Join-Path $Root "dist") -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem (Join-Path $Root "bin") -Filter "*setup.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
 
 Write-Host "Building promptub (Tauri)..." -ForegroundColor Cyan
 Push-Location $Root
@@ -39,9 +43,22 @@ try {
     $srcTools = Join-Path $Root "src-tauri\resources\tools"
     $binTools = Join-Path $bin "tools"
     if (Test-Path $releaseTools) {
-        Copy-Item $releaseTools $binTools -Recurse -Force
+        if (Test-Path $binTools) {
+            Get-ChildItem $binTools -File -ErrorAction SilentlyContinue | Where-Object {
+                $_.Name -ne "yt-dlp.exe"
+            } | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+        New-Item -ItemType Directory -Force -Path $binTools | Out-Null
+        Copy-Item (Join-Path $releaseTools "yt-dlp.exe") $binTools -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path (Join-Path $binTools "yt-dlp.exe")) -and (Test-Path $srcTools)) {
+            Copy-Item (Join-Path $srcTools "yt-dlp.exe") $binTools -Force
+        }
     } elseif (Test-Path $srcTools) {
-        Copy-Item $srcTools $binTools -Recurse -Force
+        New-Item -ItemType Directory -Force -Path $binTools | Out-Null
+        Get-ChildItem $binTools -File -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -ne "yt-dlp.exe"
+        } | Remove-Item -Force -ErrorAction SilentlyContinue
+        Copy-Item (Join-Path $srcTools "yt-dlp.exe") $binTools -Force
     }
     Write-Host "Tools: bin\tools" -ForegroundColor Green
 
@@ -56,6 +73,8 @@ try {
     }
     if ($setup) {
         Get-ChildItem $bin -Filter "*setup.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
+        Get-ChildItem (Join-Path $Root "src-tauri\target\release\bundle\nsis") -Filter "*setup.exe" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne $setup.Name } | Remove-Item -Force
         Copy-Item $setup.FullName (Join-Path $bin $setup.Name) -Force
         Write-Host "Installer: bin\$($setup.Name)" -ForegroundColor Green
     }

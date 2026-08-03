@@ -1,311 +1,110 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import "./styles.css";
 
 const $ = (id) => document.getElementById(id);
 
+const THEME_KEY = "promptub-theme";
+
+function currentTheme() {
+  return document.documentElement.getAttribute("data-theme") === "day" ? "day" : "night";
+}
+
+function applyTheme(theme) {
+  const t = theme === "day" ? "day" : "night";
+  document.documentElement.setAttribute("data-theme", t);
+  try {
+    localStorage.setItem(THEME_KEY, t);
+  } catch (_) {}
+  const btn = $("btn-theme");
+  if (btn) btn.textContent = t === "night" ? "dia" : "noite";
+  const badge = $("theme-badge");
+  if (badge) badge.textContent = `audio.sys · ${t === "night" ? "noite" : "dia"}`;
+  updateModeLabel();
+}
+
+function updateModeLabel(version) {
+  const el = $("np-mode");
+  if (!el) return;
+  const ver =
+    version ||
+    (el.textContent.match(/v[\d.]+/) || [])[0] ||
+    "";
+  const t = currentTheme();
+  const label = t === "night" ? "vermelho · noite" : "mono · dia";
+  el.textContent = ver ? `${label} · ${ver}` : label;
+}
+
+function toggleTheme() {
+  applyTheme(currentTheme() === "night" ? "day" : "night");
+}
+
 const searchInput = $("search-input");
 const resultsEl = $("results");
-const resultsVideoEl = $("results-video");
-const recommendedEl = $("recommended");
 const recommendedMusicEl = $("recommended-music");
 const queueListEl = $("queue-list");
 const statusEl = $("status");
 const npTitle = $("np-title");
 const npThumb = $("np-thumb");
 const npMode = $("np-mode");
-const welcomeTitle = $("welcome-title");
-const welcomeText = $("welcome-text");
-const welcomeList = $("welcome-list");
-const mdFilename = $("md-filename");
-const resultsTitle = $("results-title");
-const musicShell = $("music-shell");
-const videoShell = $("video-shell");
 const panelWelcome = $("panel-welcome");
 const panelResults = $("panel-results");
-const panelResultsVideo = $("panel-results-video");
-const panelRecMusic = $("panel-rec-music");
-const panelRecommended = $("panel-recommended");
-const panelFeed = $("panel-feed");
-const panelChannelNews = $("panel-channel-news");
-const panelLive = $("panel-live");
+const panelFeedHome = $("panel-feed-home");
+const panelContinue = $("panel-continue");
+const continueEl = $("continue-music");
+const panelMostPlayed = $("panel-most-played");
+const panelGenrePeers = $("panel-genre-peers");
+const genrePeersEl = $("genre-peers-music");
+const panelNewArtists = $("panel-new-artists");
+const panelHistoryMix = $("panel-history-mix");
+const mostPlayedEl = $("most-played-music");
+const newArtistsEl = $("new-artists-music");
+const historyMixEl = $("history-mix-music");
 const panelPlaylist = $("panel-playlist");
-const panelVideo = $("panel-video");
-const videoPlayerBlock = $("video-player-block");
-const videoStage = $("video-stage");
-const htmlVideo = $("html-video");
-const videoPlayHint = $("video-play-hint");
-const videoFeedScroll = $("video-feed-scroll");
-const videoHomeFeed = $("video-home-feed");
-const panelVideoContext = $("panel-video-context");
-const videoContextResultsEl = $("video-context-results");
-const videoContextSubtitle = $("video-context-subtitle");
-const btnBackHomeFeed = $("btn-back-home-feed");
-const videoFeedModeLabel = $("video-feed-mode-label");
-const liveResultsEl = $("live-results");
-const feedResultsEl = $("feed-results");
-const channelNewsResultsEl = $("channel-news-results");
-const channelNewsSubtitle = $("channel-news-subtitle");
-const feedSubtitle = $("feed-subtitle");
-const recommendedSubtitle = $("recommended-subtitle");
 const recommendedSubtitleMusic = $("recommended-subtitle-music");
 const playlistResultsEl = $("playlist-results");
 const playlistSubtitle = $("playlist-subtitle");
-const qualityControl = $("quality-control");
-const qualitySelect = $("quality-select");
-const queuePanel = $("queue-panel");
-const videoNpBar = $("video-np-bar");
-const videoNpTitle = $("video-np-title");
-const videoNpMeta = $("video-np-meta");
-const rightPanelLabel = $("right-panel-label");
-const queueTitle = $("queue-title");
+const htmlAudio = $("html-audio");
+const progressSlider = $("progress-slider");
+const timeCurrent = $("time-current");
+const timeTotal = $("time-total");
+const volumeSlider = $("volume-slider");
+const btnStop = $("btn-stop");
 
-let mode = "music";
+applyTheme(currentTheme());
+
 let loggedIn = false;
 let lastVideoId = null;
 let currentPlaylistItems = [];
-const feedCache = { music: null, video: null };
-let recLoading = false;
+let feedCache = null;
+let feedFetchId = 0;
 let loadingCount = 0;
-let videoFeedMode = "home";
-let currentVideo = null;
-let videoAutoplayPool = [];
-let videoAutoplayIndex = 0;
+let isPlaying = false;
+let progressSeeking = false;
+let lyricLines = [];
+let lyricLineEls = [];
+let lastLyricIdx = -1;
+let lyricsLoadToken = 0;
+let lyricsDelayTimer = null;
+let trackSwitchInProgress = false;
+const streamCache = new Map();
+const PREWARM_AHEAD = 3;
+const VOLUME_STEP = 5;
 
-/** Relacionados: engatilhados no play, fetch só ao rolar ou pedido explícito. */
-let relatedPrime = {
-  token: 0,
-  video: null,
-  contextDone: false,
-  contextLoading: false,
-  contextItems: [],
-  observer: null,
-};
-
-function cancelRelatedLoads() {
-  relatedPrime.token += 1;
-  relatedPrime.observer?.disconnect();
-  relatedPrime.observer = null;
-  relatedPrime.video = null;
-  relatedPrime.contextDone = false;
-  relatedPrime.contextLoading = false;
-  relatedPrime.contextItems = [];
-  setRelatedPanelLoading(false);
-}
-
-function setRelatedPanelLoading(active) {
-  panelVideoContext?.classList.toggle("related-bg-loading", active);
-}
-
-/** Busca relacionados em background — nunca bloqueia player nem overlay. */
-function fetchRelatedBackground(video = currentVideo) {
-  if (!video?.id || isAudioOnly()) return;
-  if (relatedPrime.contextLoading) return;
-  if (relatedPrime.contextItems.length && relatedPrime.video?.id === video.id) return;
-
-  relatedPrime.contextLoading = true;
-  setRelatedPanelLoading(true);
-  const token = relatedPrime.token;
-  const vid = video.id;
-
-  tauriInvoke("video_context_feed", { videoId: vid })
-    .then((items) => {
-      if (relatedPrime.token !== token) return;
-      relatedPrime.contextItems = items;
-      relatedPrime.video = video;
-      relatedPrime.contextDone = true;
-      if (currentVideo?.id === vid) {
-        buildVideoAutoplayPool(currentVideo);
-      }
-      if (panelVideoContext && !panelVideoContext.classList.contains("hidden")) {
-        void renderCards(videoContextResultsEl, items, "sem relacionados", true);
-        if (videoContextSubtitle) {
-          videoContextSubtitle.textContent = `${video.title} · ${items.length} videos`;
-        }
-        if (videoFeedModeLabel) {
-          videoFeedModeLabel.textContent = `relacionados · ${items.length}`;
-        }
-      }
-    })
-    .catch(() => {})
-    .finally(() => {
-      if (relatedPrime.token === token) {
-        relatedPrime.contextLoading = false;
-        setRelatedPanelLoading(false);
-      }
-    });
-}
-
-function collectVideoAutoplayCandidates() {
-  const seen = new Set();
-  const out = [];
-  const add = (list) => {
-    for (const v of list || []) {
-      if (!v?.id || seen.has(v.id)) continue;
-      seen.add(v.id);
-      out.push(v);
-    }
-  };
-  add(relatedPrime.contextItems);
-  add(feedCache.video?.recommended);
-  add(feedCache.video?.feed);
-  add(feedCache.video?.channel_news);
-  return out;
-}
-
-function buildVideoAutoplayPool(video) {
-  videoAutoplayPool = collectVideoAutoplayCandidates();
-  if (!video?.id) {
-    videoAutoplayIndex = 0;
-    return;
-  }
-  const idx = videoAutoplayPool.findIndex((v) => v.id === video.id);
-  if (idx >= 0) {
-    videoAutoplayIndex = idx;
-  } else {
-    videoAutoplayPool.unshift(video);
-    videoAutoplayIndex = 0;
-  }
-}
-
-async function playNextRecommendedVideo() {
-  if (isAudioOnly()) {
-    const v = await tauriInvoke("next");
-    if (v) await play(v, false);
-    return;
-  }
-
-  buildVideoAutoplayPool(currentVideo);
-
-  if (videoAutoplayIndex + 1 < videoAutoplayPool.length) {
-    videoAutoplayIndex += 1;
-    await play(videoAutoplayPool[videoAutoplayIndex], true);
-    setStatus("AUTO · proximo");
-    void fetchRelatedBackground(videoAutoplayPool[videoAutoplayIndex]);
-    return;
-  }
-
-  void fetchRelatedBackground();
-  setStatus("FIM — sem proximo no feed");
-}
-
-async function playPrevRecommendedVideo() {
-  if (isAudioOnly()) {
-    const v = await tauriInvoke("prev");
-    if (v) await play(v, false);
-    return;
-  }
-
-  buildVideoAutoplayPool(currentVideo);
-  if (videoAutoplayIndex > 0) {
-    videoAutoplayIndex -= 1;
-    await play(videoAutoplayPool[videoAutoplayIndex], true);
-    setStatus("AUTO · anterior");
-  }
-}
-
-function showRelatedPlaceholders(video) {
-  if (videoContextSubtitle) {
-    const title = video?.title ? `${video.title} · ` : "";
-    videoContextSubtitle.textContent = `${title}role para carregar relacionados`;
-  }
-  if (videoContextResultsEl) {
-    videoContextResultsEl.replaceChildren();
-  }
-}
-
-function setupRelatedScrollObserver(token) {
-  relatedPrime.observer?.disconnect();
-  if (!videoFeedScroll) return;
-
-  relatedPrime.observer = new IntersectionObserver(
-    (entries) => {
-      if (!entries.some((e) => e.isIntersecting)) return;
-      if (relatedPrime.token !== token) return;
-      void flushRelatedContent(token);
-    },
-    { root: videoFeedScroll, rootMargin: "160px 0px", threshold: 0.04 }
-  );
-
-  if (panelVideoContext) relatedPrime.observer.observe(panelVideoContext);
-}
-
-async function flushContextFeed(token) {
-  if (relatedPrime.contextDone || relatedPrime.contextLoading || relatedPrime.token !== token) {
-    return;
-  }
-  const video = relatedPrime.video;
-  if (!video?.id || isAudioOnly()) return;
-
-  relatedPrime.contextLoading = true;
-  setRelatedPanelLoading(true);
-
-  try {
-    const items = await tauriInvoke("video_context_feed", { videoId: video.id });
-    if (relatedPrime.token !== token) return;
-    relatedPrime.contextItems = items;
-    relatedPrime.contextDone = true;
-    await renderCards(videoContextResultsEl, items, "sem relacionados", true);
-    if (videoContextSubtitle) {
-      videoContextSubtitle.textContent = `${video.title} · ${items.length} videos`;
-    }
-    if (currentVideo?.id === video.id) {
-      buildVideoAutoplayPool(currentVideo);
-    }
-    if (videoFeedModeLabel) {
-      videoFeedModeLabel.textContent = `relacionados · ${items.length}`;
-    }
-  } catch (_) {
-    /* silencioso — nao trava video nem status global */
-  } finally {
-    if (relatedPrime.token === token) {
-      relatedPrime.contextLoading = false;
-      setRelatedPanelLoading(false);
-    }
-  }
-}
-
-async function flushRelatedContent(token = relatedPrime.token) {
-  if (relatedPrime.token !== token) return;
-  await flushContextFeed(token);
-}
-
-/** Registra video atual + UI placeholder; não chama yt-dlp até scroll. */
-function primeRelatedLoads(video) {
-  if (!video?.id || isAudioOnly()) return;
-
-  cancelRelatedLoads();
-  const token = relatedPrime.token;
-  relatedPrime.video = video;
-
-  videoHomeFeed?.classList.remove("hidden");
-  panelVideoContext?.classList.remove("hidden");
-  panelResultsVideo?.classList.add("hidden");
-  btnBackHomeFeed?.classList.add("hidden");
-  if (videoFeedModeLabel) videoFeedModeLabel.textContent = "assistindo";
-
-  showRelatedPlaceholders(video);
-  setupRelatedScrollObserver(token);
-}
-
-/** Fetch manual — sempre em background, sem overlay. */
-async function loadVideoContextFeed(video, { force = false } = {}) {
-  if (!video?.id || isAudioOnly()) return;
-
-  if (!force && relatedPrime.video?.id === video.id && !relatedPrime.contextDone) {
-    primeRelatedLoads(video);
-    return;
-  }
-
-  fetchRelatedBackground(video);
+function adjustVolume(delta) {
+  if (!htmlAudio || !volumeSlider) return;
+  const next = Math.min(100, Math.max(0, Number(volumeSlider.value) + delta));
+  volumeSlider.value = String(next);
+  htmlAudio.volume = next / 100;
+  setStatus(`volume · ${next}%`);
 }
 
 const LOADING_MSG = {
   search: "BUSCANDO FAIXAS...",
-  rec: "CARREGANDO FEED...",
   playlist: "MONTANDO PLAYLIST...",
 };
 
-function setLoading(active, message = "CARREGANDO...", hint = "buscando no youtube via yt-dlp") {
+function setLoading(active, message = "CARREGANDO...", hint = "resolvendo stream via yt-dlp") {
   const overlay = $("loading-overlay");
   const text = $("loading-text");
   const hintEl = $("loading-hint");
@@ -345,30 +144,239 @@ function thumbUrl(v) {
   return v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`;
 }
 
-const streamPrefetchIds = new Set();
-
-function videoWatchUrl(v) {
-  return v?.url || (v?.id ? `https://www.youtube.com/watch?v=${v.id}` : "");
+function formatTime(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return "0:00";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function prefetchVideoStream(video) {
-  if (!isTauri() || isAudioOnly() || !video?.id) return;
-  if (streamPrefetchIds.has(video.id)) return;
-  streamPrefetchIds.add(video.id);
-  tauriInvoke("resolve_stream", {
+function updatePlayButton() {
+  if (!btnStop) return;
+  btnStop.textContent = isPlaying ? "⏸" : "▶";
+  btnStop.title = isPlaying ? "Pausar" : "Tocar";
+}
+
+function updateNowPlaying(video) {
+  lastVideoId = video.id;
+  if (npTitle) npTitle.textContent = video.title;
+  if (npThumb) {
+    npThumb.src = thumbUrl(video);
+    npThumb.classList.remove("hidden");
+  }
+  scheduleLyricsLoad(video);
+}
+
+function scheduleLyricsLoad(video) {
+  if (lyricsDelayTimer) clearTimeout(lyricsDelayTimer);
+  const scroll = $("lyrics-scroll");
+  const trackLabel = $("lyrics-track");
+  if (trackLabel) trackLabel.textContent = video.title;
+  if (scroll) {
+    scroll.replaceChildren();
+    const p = document.createElement("p");
+    p.className = "lyrics-placeholder muted";
+    p.textContent = "letra em breve…";
+    scroll.appendChild(p);
+  }
+  lyricsDelayTimer = setTimeout(() => {
+    void loadLyrics(video);
+  }, 2000);
+}
+
+async function loadLyrics(video) {
+  const scroll = $("lyrics-scroll");
+  const trackLabel = $("lyrics-track");
+  if (!scroll) return;
+
+  const token = ++lyricsLoadToken;
+  lyricLines = [];
+  lyricLineEls = [];
+  lastLyricIdx = -1;
+
+  if (trackLabel) trackLabel.textContent = video.title;
+  scroll.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "lyrics-placeholder muted";
+  loading.textContent = "buscando letra...";
+  scroll.appendChild(loading);
+
+  try {
+    const lines = await tauriInvoke("fetch_lyrics", {
+      videoId: video.id,
+      title: video.title || "",
+      artist: video.uploader || "",
+    });
+    if (token !== lyricsLoadToken) return;
+    renderLyrics(lines);
+  } catch {
+    if (token !== lyricsLoadToken) return;
+    scroll.replaceChildren();
+    const p = document.createElement("p");
+    p.className = "lyrics-placeholder muted";
+    p.textContent = "sem letra sincronizada";
+    scroll.appendChild(p);
+  }
+}
+
+function renderLyrics(lines) {
+  const scroll = $("lyrics-scroll");
+  if (!scroll || !Array.isArray(lines) || !lines.length) return;
+
+  scroll.replaceChildren();
+  lyricLines = lines;
+  lyricLineEls = lines.map((line, i) => {
+    const p = document.createElement("p");
+    p.className = "lyrics-line";
+    p.dataset.index = String(i);
+    p.textContent = line.text;
+    p.title = "Ir para este trecho";
+    p.onclick = () => {
+      if (htmlAudio && Number.isFinite(line.start)) {
+        htmlAudio.currentTime = line.start;
+      }
+    };
+    scroll.appendChild(p);
+    return p;
+  });
+}
+
+function syncLyricsHighlight() {
+  if (!htmlAudio || !lyricLines.length || !lyricLineEls.length) return;
+
+  const t = htmlAudio.currentTime;
+  let activeIdx = -1;
+  for (let i = 0; i < lyricLines.length; i++) {
+    const line = lyricLines[i];
+    if (t >= line.start && t < line.end) {
+      activeIdx = i;
+      break;
+    }
+  }
+  if (activeIdx < 0) {
+    for (let i = lyricLines.length - 1; i >= 0; i--) {
+      if (t >= lyricLines[i].start) {
+        activeIdx = i;
+        break;
+      }
+    }
+  }
+  if (activeIdx === lastLyricIdx) return;
+
+  lastLyricIdx = activeIdx;
+  lyricLineEls.forEach((el, i) => {
+    el.classList.toggle("active", i === activeIdx);
+  });
+  if (activeIdx >= 0 && lyricLineEls[activeIdx]) {
+    lyricLineEls[activeIdx].scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+}
+
+function focusSearch() {
+  searchInput?.focus();
+}
+
+function setStatus(msg) {
+  if (statusEl) statusEl.textContent = msg || "";
+}
+
+function showWelcome() {
+  panelWelcome?.classList.remove("hidden");
+  panelResults?.classList.add("hidden");
+  panelFeedHome?.classList.add("hidden");
+  panelPlaylist?.classList.add("hidden");
+}
+
+function setMdPath(...segments) {
+  const mdPath = $("md-filepath");
+  if (!mdPath) return;
+  mdPath.replaceChildren();
+  segments.forEach((seg, i) => {
+    if (i > 0) mdPath.appendChild(document.createTextNode(" / "));
+    const code = document.createElement("code");
+    code.textContent = seg;
+    mdPath.appendChild(code);
+  });
+}
+
+function showMusicResults() {
+  panelWelcome?.classList.add("hidden");
+  panelResults?.classList.remove("hidden");
+  panelFeedHome?.classList.add("hidden");
+  panelPlaylist?.classList.add("hidden");
+  $("btn-nav-home")?.classList.remove("active");
+  const q = searchInput?.value.trim();
+  if (q) setMdPath("promptub", "busca", q);
+}
+
+function showMusicHome() {
+  panelWelcome?.classList.add("hidden");
+  panelResults?.classList.add("hidden");
+  panelPlaylist?.classList.add("hidden");
+  panelFeedHome?.classList.remove("hidden");
+}
+
+async function tauriInvoke(cmd, args = {}) {
+  if (!isTauri()) {
+    throw new Error("Abra pelo app promptub (nao pelo navegador)");
+  }
+  return invoke(cmd, args);
+}
+
+function showPlaylist() {
+  panelWelcome?.classList.add("hidden");
+  panelFeedHome?.classList.add("hidden");
+  panelPlaylist?.classList.remove("hidden");
+}
+
+async function resolveStreamUrl(video) {
+  if (streamCache.has(video.id)) return streamCache.get(video.id);
+  const url = await tauriInvoke("resolve_stream", {
     videoId: video.id,
-    videoUrl: videoWatchUrl(video),
-  }).catch(() => streamPrefetchIds.delete(video.id));
+    videoUrl: video.url || null,
+  });
+  streamCache.set(video.id, url);
+  return url;
 }
 
-function prewarmUpcomingStreams() {
-  if (!isTauri() || isAudioOnly() || !videoAutoplayPool.length) return;
-  const upcoming = videoAutoplayPool.slice(
-    videoAutoplayIndex + 1,
-    videoAutoplayIndex + 3
-  );
-  if (!upcoming.length) return;
-  tauriInvoke("prewarm_streams", { items: upcoming }).catch(() => {});
+async function prewarmNextInQueue() {
+  try {
+    const q = await tauriInvoke("get_queue");
+    const upcoming = q.items.slice(q.current + 1, q.current + 1 + PREWARM_AHEAD);
+    if (!upcoming.length) return;
+    await tauriInvoke("prewarm_playlist", { items: upcoming, audioOnly: true });
+    for (const v of upcoming) {
+      if (!streamCache.has(v.id)) {
+        resolveStreamUrl(v).catch(() => {});
+      }
+    }
+  } catch (_) {}
+}
+
+async function streamAndPlay(video) {
+  if (!htmlAudio) throw new Error("Player de audio indisponivel");
+  updateNowPlaying(video);
+  setStatus("resolvendo stream...");
+  const url = await resolveStreamUrl(video);
+  htmlAudio.src = url;
+  htmlAudio.volume = Number(volumeSlider?.value ?? 100) / 100;
+  await htmlAudio.play();
+  isPlaying = true;
+  updatePlayButton();
+  setStatus("tocando · web");
+  refreshQueue();
+  void prewarmNextInQueue();
+}
+
+async function play(video, setQueue) {
+  try {
+    await tauriInvoke("play", { video, setQueue, audioOnly: true });
+    await streamAndPlay(video);
+  } catch (e) {
+    isPlaying = false;
+    updatePlayButton();
+    setStatus(`Erro: ${e}`);
+  }
 }
 
 function createCard(v) {
@@ -387,8 +395,7 @@ function createCard(v) {
   title.textContent = v.title;
   const meta = document.createElement("div");
   meta.className = "card-meta";
-  const liveTag = v.is_live ? " ● LIVE" : "";
-  meta.textContent = `${v.uploader || ""} · ${v.duration || ""}${liveTag}`;
+  meta.textContent = `${v.uploader || ""} · ${v.duration || ""}`;
   info.append(title, meta);
 
   const actions = document.createElement("div");
@@ -407,54 +414,7 @@ function createCard(v) {
   return card;
 }
 
-function createYtCard(v) {
-  const card = document.createElement("article");
-  card.className = "yt-card" + (v.is_live ? " yt-card-live" : "");
-
-  const thumbWrap = document.createElement("div");
-  thumbWrap.className = "yt-thumb-wrap";
-  const img = document.createElement("img");
-  img.className = "yt-thumb";
-  img.src = thumbUrl(v);
-  img.alt = "";
-  img.loading = "lazy";
-  img.onclick = () => play(v, true);
-  card.onmouseenter = () => prefetchVideoStream(v);
-  if (v.duration && !v.is_live) {
-    const dur = document.createElement("span");
-    dur.className = "yt-duration";
-    dur.textContent = v.duration;
-    thumbWrap.append(img, dur);
-  } else {
-    thumbWrap.append(img);
-  }
-
-  const info = document.createElement("div");
-  info.className = "yt-info";
-  const title = document.createElement("div");
-  title.className = "yt-title";
-  title.title = v.title;
-  title.textContent = v.title;
-  title.onclick = () => play(v, true);
-  const meta = document.createElement("div");
-  meta.className = "yt-meta";
-  meta.textContent = v.uploader || "youtube";
-  const actions = document.createElement("div");
-  actions.className = "yt-actions";
-  const btnQueue = document.createElement("button");
-  btnQueue.className = "btn-queue";
-  btnQueue.textContent = "+ fila";
-  btnQueue.onclick = (e) => {
-    e.stopPropagation();
-    enqueue(v);
-  };
-  actions.append(btnQueue);
-  info.append(title, meta, actions);
-  card.append(thumbWrap, info);
-  return card;
-}
-
-async function renderCards(container, items, emptyMsg, yt = false) {
+async function renderCards(container, items, emptyMsg) {
   if (!container) return;
   container.replaceChildren();
   if (!items?.length) {
@@ -464,178 +424,12 @@ async function renderCards(container, items, emptyMsg, yt = false) {
     container.appendChild(p);
     return;
   }
-  const factory = yt ? createYtCard : createCard;
-  const batchSize = yt ? 6 : 4;
-  for (let i = 0; i < items.length; i += batchSize) {
-    const batch = items.slice(i, i + batchSize);
-    for (const v of batch) {
-      container.appendChild(factory(v));
+  for (let i = 0; i < items.length; i += 4) {
+    for (const v of items.slice(i, i + 4)) {
+      container.appendChild(createCard(v));
     }
-    if (i + batchSize < items.length) {
-      await paintUi();
-    }
+    if (i + 4 < items.length) await paintUi();
   }
-}
-
-const LABELS = {
-  music: {
-    mode: "AUDIO.SYS",
-    placeholder: "_buscar musica...",
-    welcome: "Modo áudio — stream via mpv, sem janela de vídeo.",
-    welcomeList: [
-      "Digite uma query acima e pressione <code>Enter</code>",
-      "Monte playlists com <code>[ REC.PL ]</code>",
-      "Volume controlado na barra inferior",
-    ],
-    playing: "STREAM ATIVO",
-    searchTitle: "Resultados da busca",
-    mdFile: "README.md",
-  },
-  video: {
-    mode: "VIDEO.SYS",
-    placeholder: "_buscar video ou colar url...",
-    welcome: "Modo vídeo — player integrado na página, estilo README + YouTube.",
-    welcomeList: [
-      "Clique no vídeo para pausar / retomar",
-      "Role o feed — o player sobe junto",
-      "Use <code>[ FEED INICIAL ]</code> para voltar ao explorar",
-    ],
-    playing: "REPRODUZINDO",
-    searchTitle: "Resultados da busca",
-    mdFile: "watch.md",
-  },
-};
-
-function isAudioOnly() {
-  return mode === "music";
-}
-
-function focusSearch() {
-  searchInput?.focus();
-}
-
-function setStatus(msg) {
-  if (statusEl) statusEl.textContent = msg || "";
-}
-
-function applyMode(next) {
-  mode = next;
-  document.body.classList.toggle("mode-video", mode === "video");
-  document.querySelectorAll(".tab").forEach((t) => {
-    t.classList.toggle("active", t.dataset.mode === mode);
-  });
-  const L = LABELS[mode];
-  if (searchInput) searchInput.placeholder = L.placeholder;
-  if (npMode) npMode.textContent = L.mode;
-  if (welcomeTitle) welcomeTitle.textContent = mode === "video" ? "Assistir" : "Bem-vindo";
-  if (welcomeText) welcomeText.textContent = L.welcome;
-  if (mdFilename) mdFilename.textContent = L.mdFile;
-  if (welcomeList && L.welcomeList?.length) {
-    welcomeList.innerHTML = L.welcomeList.map((item) => `<li>${item}</li>`).join("");
-  }
-  if (resultsTitle) resultsTitle.textContent = L.searchTitle;
-  if (qualityControl) qualityControl.classList.toggle("hidden", mode !== "video");
-  musicShell?.classList.toggle("hidden", mode !== "music");
-  videoShell?.classList.toggle("hidden", mode !== "video");
-  queuePanel?.classList.toggle("hidden", mode !== "music");
-  if (rightPanelLabel) rightPanelLabel.textContent = "QUEUE.SYS";
-  if (queueTitle) queueTitle.textContent = "Fila";
-  if (next === "music") stopVideoWeb();
-  if (next === "video" && isTauri()) {
-    tauriInvoke("hide_video_panel").catch(() => {});
-  }
-  focusSearch();
-}
-
-function showWelcome() {
-  if (!isAudioOnly()) return;
-  panelWelcome?.classList.remove("hidden");
-  panelResults?.classList.add("hidden");
-  panelRecMusic?.classList.add("hidden");
-  panelPlaylist?.classList.add("hidden");
-}
-
-function showMusicResults() {
-  panelWelcome?.classList.add("hidden");
-  panelResults?.classList.remove("hidden");
-  panelRecMusic?.classList.add("hidden");
-  panelPlaylist?.classList.add("hidden");
-}
-
-function showVideoResults() {
-  videoFeedMode = "search";
-  panelResultsVideo?.classList.remove("hidden");
-  videoHomeFeed?.classList.add("hidden");
-  panelVideoContext?.classList.add("hidden");
-  btnBackHomeFeed?.classList.remove("hidden");
-  if (videoFeedModeLabel) videoFeedModeLabel.textContent = "resultados da busca";
-  videoFeedScroll?.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-function showVideoBrowse() {
-  panelResultsVideo?.classList.add("hidden");
-  if (videoFeedMode === "context") {
-    videoHomeFeed?.classList.add("hidden");
-    panelVideoContext?.classList.remove("hidden");
-    btnBackHomeFeed?.classList.remove("hidden");
-  } else {
-    showHomeFeedView(false);
-  }
-}
-
-function showHomeFeedView(scrollTop = true) {
-  videoFeedMode = "home";
-  panelResultsVideo?.classList.add("hidden");
-  videoHomeFeed?.classList.remove("hidden");
-  panelVideoContext?.classList.add("hidden");
-  btnBackHomeFeed?.classList.add("hidden");
-  if (videoFeedModeLabel) videoFeedModeLabel.textContent = "feed inicial";
-  if (scrollTop) videoFeedScroll?.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-function showVideoContextView(video, scrollTop = true) {
-  videoFeedMode = "context";
-  panelResultsVideo?.classList.add("hidden");
-  videoHomeFeed?.classList.add("hidden");
-  panelVideoContext?.classList.remove("hidden");
-  btnBackHomeFeed?.classList.remove("hidden");
-  if (videoFeedModeLabel) {
-    const label = video?.title || "video atual";
-    videoFeedModeLabel.textContent = `relacionados a: ${label}`;
-  }
-  if (scrollTop) videoFeedScroll?.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-function goToHomeFeed() {
-  cancelRelatedLoads();
-  showHomeFeedView(true);
-  if (feedCache.video) {
-    renderHomeFeed(feedCache.video);
-  } else {
-    loadHomeFeed(true);
-  }
-}
-
-function showMusicHome() {
-  panelWelcome?.classList.add("hidden");
-  panelResults?.classList.add("hidden");
-  panelPlaylist?.classList.add("hidden");
-}
-
-function showPlaylist() {
-  panelWelcome?.classList.add("hidden");
-  panelPlaylist?.classList.remove("hidden");
-}
-
-function showRecommendedMusic() {
-  panelRecMusic?.classList.remove("hidden");
-}
-
-async function tauriInvoke(cmd, args = {}) {
-  if (!isTauri()) {
-    throw new Error("Abra pelo app promptub (nao pelo navegador)");
-  }
-  return invoke(cmd, args);
 }
 
 function extractYoutubeId(input) {
@@ -661,13 +455,11 @@ async function search() {
   if (videoId) {
     try {
       const video = await withLoading(
-        "RESOLVENDO VIDEO...",
+        "RESOLVENDO FAIXA...",
         "yt-dlp · metadata",
         async () => tauriInvoke("resolve_video", { videoId })
       );
-      if (mode !== "video") applyMode("video");
       await play(video, true);
-      setStatus(`URL OK — ${video.title}`);
     } catch (e) {
       setStatus(`Erro: ${e}`);
     }
@@ -678,97 +470,19 @@ async function search() {
     const res = await withLoading(LOADING_MSG.search, "yt-dlp · ytsearch", async () =>
       tauriInvoke("search", { query: q })
     );
-    if (isAudioOnly()) {
-      showMusicResults();
-      await renderCards(resultsEl, res, "Nenhum resultado");
-    } else {
-      showVideoResults();
-      await renderCards(resultsVideoEl, res, "Nenhum resultado", true);
-    }
-    setStatus(`${res.length} HIT${res.length === 1 ? "" : "S"}`);
+    showMusicResults();
+    await renderCards(resultsEl, res, "Nenhum resultado");
+    setStatus(`${res.length} hit${res.length === 1 ? "" : "s"}`);
+    setMdPath("promptub", "busca", q);
   } catch (e) {
     setStatus(`Erro: ${e}`);
-  }
-}
-
-function updatePlayHint() {
-  if (!videoPlayHint || !htmlVideo) return;
-  videoPlayHint.classList.toggle("hidden", !htmlVideo.paused);
-}
-
-function toggleHtmlVideo() {
-  if (!htmlVideo?.src) return;
-  if (htmlVideo.paused) htmlVideo.play().catch(() => {});
-  else htmlVideo.pause();
-}
-
-function stopVideoWeb() {
-  if (!htmlVideo) return;
-  htmlVideo.pause();
-  htmlVideo.removeAttribute("src");
-  htmlVideo.load();
-  updatePlayHint();
-}
-
-async function playVideoWeb(video) {
-  if (!htmlVideo || !video?.id) return;
-  currentVideo = video;
-  const vol = Number($("volume-slider")?.value ?? 100);
-  setStatus("RESOLVENDO STREAM...");
-  const url = await tauriInvoke("resolve_stream", {
-    videoId: video.id,
-    videoUrl: videoWatchUrl(video),
-  });
-  htmlVideo.src = url;
-  htmlVideo.volume = vol / 100;
-  await htmlVideo.play();
-  updatePlayHint();
-  prewarmUpcomingStreams();
-}
-
-async function hideVideoPanel() {
-  stopVideoWeb();
-  cancelRelatedLoads();
-  currentVideo = null;
-  videoPlayerBlock?.classList.add("hidden");
-  videoNpBar?.classList.add("hidden");
-  try {
-    await tauriInvoke("hide_video_panel");
-  } catch (_) {}
-}
-
-function initHtmlVideoPlayer() {
-  if (!htmlVideo) return;
-  htmlVideo.addEventListener("click", (e) => {
-    e.preventDefault();
-    toggleHtmlVideo();
-  });
-  htmlVideo.addEventListener("play", updatePlayHint);
-  htmlVideo.addEventListener("pause", updatePlayHint);
-  htmlVideo.addEventListener("ended", () => {
-    void playNextRecommendedVideo();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.code !== "Space" || e.target?.matches("input, textarea, select, button")) return;
-    if (isAudioOnly() || !htmlVideo?.src || videoPlayerBlock?.classList.contains("hidden")) return;
-    e.preventDefault();
-    toggleHtmlVideo();
-  });
-}
-
-function updateVideoNowPlaying(video) {
-  if (!video || isAudioOnly()) return;
-  videoNpBar?.classList.remove("hidden");
-  if (videoNpTitle) videoNpTitle.textContent = video.title;
-  if (videoNpMeta) {
-    videoNpMeta.textContent = `${video.uploader || ""}${video.duration ? ` · ${video.duration}` : ""}`;
   }
 }
 
 async function startPrewarm(items) {
   if (!items?.length) return;
   try {
-    await tauriInvoke("prewarm_playlist", { items, audioOnly: isAudioOnly() });
+    await tauriInvoke("prewarm_playlist", { items, audioOnly: true });
     pollPrewarmStatus();
   } catch (_) {}
 }
@@ -777,164 +491,280 @@ async function pollPrewarmStatus() {
   try {
     const s = await tauriInvoke("prewarm_status");
     if (s.total > 0 && s.done < s.total) {
-      setStatus(`PREWARM ${s.done}/${s.total}`);
+      setStatus(`prewarm ${s.done}/${s.total}`);
       setTimeout(pollPrewarmStatus, 400);
     } else if (s.total > 0 && s.done >= s.total) {
-      setStatus("PREWARM OK");
+      setStatus("streams prontos");
     }
   } catch (_) {}
-}
-
-async function play(video, setQueue) {
-  setStatus("INIT STREAM...");
-  lastVideoId = video.id;
-  try {
-    if (!isAudioOnly()) {
-      showVideoBrowse();
-      videoPlayerBlock?.classList.remove("hidden");
-      videoFeedScroll?.scrollTo({ top: 0 });
-      updateVideoNowPlaying(video);
-      buildVideoAutoplayPool(video);
-      await Promise.all([
-        playVideoWeb(video),
-        tauriInvoke("play", { video, setQueue, audioOnly: false }),
-      ]);
-      primeRelatedLoads(video);
-    } else {
-      await hideVideoPanel();
-      await tauriInvoke("play", { video, setQueue, audioOnly: true });
-    }
-    if (npTitle) npTitle.textContent = video.title;
-    if (npThumb) {
-      npThumb.src = thumbUrl(video);
-      npThumb.classList.remove("hidden");
-    }
-    setStatus(LABELS[mode].playing);
-    refreshQueue();
-  } catch (e) {
-    setStatus(`Erro: ${e}`);
-  }
 }
 
 async function enqueue(video) {
   try {
     await tauriInvoke("enqueue", { video });
-    setStatus("ENQUEUED");
+    setStatus("enqueued");
     refreshQueue();
   } catch (e) {
     setStatus(`Erro: ${e}`);
   }
 }
 
-async function renderHomeFeed(feed) {
-  if (isAudioOnly()) {
-    await renderCards(recommendedMusicEl, feed.recommended, "sem recomendados");
-    if (recommendedSubtitleMusic) {
-      const n = feed.recommended?.length || 0;
-      recommendedSubtitleMusic.textContent = feed.seed_label
-        ? `baseado em: ${feed.seed_label} · ${n} itens`
-        : `${n} itens`;
-    }
-    if (feed.recommended?.length) {
-      showMusicHome();
-      showRecommendedMusic();
-    } else {
-      showWelcome();
-    }
+async function renderFeedRow(container, items, emptyMsg) {
+  if (!container) return;
+  container.replaceChildren();
+  if (!items?.length) {
+    const p = document.createElement("p");
+    p.className = "muted feed-empty";
+    p.textContent = emptyMsg;
+    container.appendChild(p);
     return;
   }
-
-  showVideoBrowse();
-  showHomeFeedView(false);
-
-  if (feed.channel_news?.length) {
-    await renderCards(channelNewsResultsEl, feed.channel_news, "sem novidades", true);
-    if (channelNewsSubtitle) {
-      const channels = [
-        ...new Set(feed.channel_news.map((v) => v.uploader).filter(Boolean)),
-      ];
-      const label = loggedIn
-        ? "inscricoes + canais que voce assiste"
-        : "canais do seu historico local";
-      channelNewsSubtitle.textContent =
-        channels.length > 0
-          ? `${label} · ${channels.slice(0, 4).join(", ")}${channels.length > 4 ? "…" : ""}`
-          : label;
-    }
-    panelChannelNews?.classList.remove("hidden");
-  } else {
-    panelChannelNews?.classList.add("hidden");
-  }
-
-    if (feed.feed?.length) {
-    await renderCards(feedResultsEl, feed.feed, "sem itens no feed", true);
-    if (feedSubtitle) {
-      const base = loggedIn
-        ? "para voce · inscricoes · novidades"
-        : "para voce · historico local · explorar";
-      feedSubtitle.textContent = `${base} · ${feed.feed.length} videos`;
-    }
-    panelFeed?.classList.remove("hidden");
-  } else {
-    panelFeed?.classList.add("hidden");
-  }
-
-  await renderCards(recommendedEl, feed.recommended, "sem recomendados", true);
-  if (recommendedSubtitle) {
-    const n = feed.recommended?.length || 0;
-    recommendedSubtitle.textContent = feed.seed_label
-      ? `relacionados a: ${feed.seed_label} · ${n}`
-      : `${n} videos para voce`;
-  }
-  if (feed.recommended?.length) {
-    panelRecommended?.classList.remove("hidden");
-  } else {
-    panelRecommended?.classList.add("hidden");
-  }
-
-  if (feed.live?.length) {
-    await renderCards(liveResultsEl, feed.live, "sem lives", true);
-    panelLive?.classList.remove("hidden");
-  } else {
-    panelLive?.classList.add("hidden");
-  }
-
-  if (currentVideo && !isAudioOnly()) {
-    buildVideoAutoplayPool(currentVideo);
+  for (const v of items) {
+    container.appendChild(createCard(v));
   }
 }
 
-async function loadHomeFeed(force = false) {
-  if (recLoading) return;
-  if (!force && feedCache[mode]) {
-    await renderHomeFeed(feedCache[mode]);
-    setStatus(`FEED CACHE — ${feedCache[mode].recommended?.length || 0}`);
+async function playRow(items) {
+  if (!items?.length) return;
+  await tauriInvoke("load_queue", { items });
+  await play(items[0], false);
+}
+
+async function queueRow(items) {
+  if (!items?.length) return;
+  for (const v of items) await tauriInvoke("enqueue", { video: v });
+  setStatus(`+${items.length} na fila`);
+  refreshQueue();
+  void prewarmNextInQueue();
+}
+
+function emptyFeed() {
+  return {
+    recommended: [],
+    continue_listening: [],
+    most_played: [],
+    new_artists: [],
+    history_mix: [],
+    feed: [],
+    seed_label: "",
+  };
+}
+
+function collectFeedIds() {
+  if (!feedCache) return [];
+  const ids = new Set();
+  for (const key of [
+    "continue_listening",
+    "recommended",
+    "most_played",
+    "feed",
+    "new_artists",
+    "history_mix",
+  ]) {
+    for (const v of feedCache[key] || []) {
+      if (v?.id) ids.add(v.id);
+    }
+  }
+  return [...ids];
+}
+
+function setSectionLoading(panelId, loading) {
+  const panel = $(panelId);
+  if (!panel) return;
+  panel.classList.toggle("section-loading", loading);
+}
+
+async function prewarmFeedItems(items) {
+  const batch = (items || []).slice(0, 3);
+  if (!batch.length) return;
+  try {
+    await tauriInvoke("prewarm_playlist", { items: batch, audioOnly: true });
+    for (const v of batch) {
+      if (!streamCache.has(v.id)) resolveStreamUrl(v).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+async function renderLocalFeedParts(local) {
+  if (!feedCache) feedCache = emptyFeed();
+  feedCache.continue_listening = local.continue_listening || [];
+  feedCache.most_played = local.most_played || [];
+  feedCache.seed_label = local.seed_label || feedCache.seed_label || "";
+
+  const hasContinue = feedCache.continue_listening.length > 0;
+  panelContinue?.classList.toggle("hidden", !hasContinue);
+  if (hasContinue) {
+    await renderFeedRow(continueEl, feedCache.continue_listening, "");
+    const lastTitle = feedCache.continue_listening[0]?.title || "";
+    $("continue-subtitle").textContent = lastTitle
+      ? `ultima · ${lastTitle.slice(0, 48)}${lastTitle.length > 48 ? "…" : ""}`
+      : `${feedCache.continue_listening.length} faixas recentes`;
+    void prewarmFeedItems(feedCache.continue_listening);
+  }
+
+  const hasMost = feedCache.most_played.length > 0;
+  panelMostPlayed?.classList.toggle("hidden", !hasMost);
+  if (hasMost) {
+    await renderFeedRow(mostPlayedEl, feedCache.most_played, "");
+    $("most-played-subtitle").textContent = `${feedCache.most_played.length} do seu historico`;
+  }
+}
+
+async function applyFeedSection(section, items) {
+  if (!feedCache) feedCache = emptyFeed();
+  const map = {
+    recommended: ["recommended", recommendedMusicEl, "recommended-subtitle-music"],
+    peers: ["feed", genrePeersEl, "genre-peers-subtitle"],
+    new_artists: ["new_artists", newArtistsEl, "new-artists-subtitle"],
+    history_mix: ["history_mix", historyMixEl, "history-mix-subtitle"],
+  };
+  const cfg = map[section];
+  if (!cfg) return;
+  const [field, el, subtitleId] = cfg;
+  feedCache[field] = items || [];
+
+  if (section === "recommended") {
+    await renderFeedRow(el, items, "sem recomendados");
+    if (recommendedSubtitleMusic) {
+      recommendedSubtitleMusic.textContent = feedCache.seed_label
+        ? `${feedCache.seed_label} · ${items.length} faixas`
+        : `${items.length} faixas`;
+    }
+    void prewarmFeedItems(items);
     return;
   }
 
-    const btn = isAudioOnly() ? $("btn-refresh-rec-music") : $("btn-refresh-rec");
-  recLoading = true;
+  const panel =
+    section === "peers"
+      ? panelGenrePeers
+      : section === "new_artists"
+        ? panelNewArtists
+        : panelHistoryMix;
+  panel?.classList.toggle("hidden", !items?.length);
+  if (items?.length) {
+    await renderFeedRow(el, items, "");
+    const sub = $(subtitleId);
+    if (sub) {
+      const labels = {
+        peers: `${items.length} artistas do mesmo genero`,
+        new_artists: `${items.length} descobertas`,
+        history_mix: `feito pra voce · ${items.length} faixas`,
+      };
+      sub.textContent = labels[section] || `${items.length} faixas`;
+    }
+    void prewarmFeedItems(items);
+  }
+}
+
+async function loadLazyFeedSections(fetchId, essentialOnly = false) {
+  if (essentialOnly) return;
+  const sections = [
+    { key: "peers", panel: "panel-genre-peers" },
+    { key: "new_artists", panel: "panel-new-artists" },
+    { key: "history_mix", panel: "panel-history-mix" },
+  ];
+
+  await Promise.all(
+    sections.map(async ({ key, panel }) => {
+      setSectionLoading(panel, true);
+      try {
+        const res = await tauriInvoke("home_feed_section", {
+          section: key,
+          excludeIds: collectFeedIds(),
+        });
+        if (fetchId !== feedFetchId) return;
+        await applyFeedSection(key, res.items || []);
+      } catch (_) {}
+      setSectionLoading(panel, false);
+    })
+  );
+
+  if (fetchId === feedFetchId && feedCache) {
+    try {
+      await tauriInvoke("save_stored_feed", { feed: feedCache });
+    } catch (_) {}
+  }
+}
+
+async function loadHomeFeedProgressive({ force = false, essentialOnly = false } = {}) {
+  if (!force && feedCache?.recommended?.length) {
+    await renderHomeFeed(feedCache);
+    return;
+  }
+
+  const fetchId = ++feedFetchId;
+  const btn = $("btn-refresh-rec-music");
   if (btn) btn.disabled = true;
+
   try {
-    const feed = await withLoading(
-      LOADING_MSG.rec,
-      isAudioOnly() ? "mix/radio youtube" : "para voce · novidades · seu historico",
-      async () => tauriInvoke("home_recommendations", { mode })
-    );
-    feedCache[mode] = feed;
-    await renderHomeFeed(feed);
-    const total =
-      (feed.channel_news?.length || 0) +
-      (feed.feed?.length || 0) +
-      (feed.recommended?.length || 0);
-    setStatus(`FEED OK — ${total}`);
+    const local = await tauriInvoke("home_feed_local");
+    if (fetchId !== feedFetchId) return;
+    if (!feedCache) feedCache = emptyFeed();
+    await renderLocalFeedParts(local);
+    showMusicHome();
+    setStatus(`feed · ${local.seed_label || "carregando"}`);
+
+    setSectionLoading("panel-rec-music", true);
+    const rec = await tauriInvoke("home_feed_section", {
+      section: "recommended",
+      excludeIds: collectFeedIds(),
+      essential: essentialOnly,
+    });
+    if (fetchId !== feedFetchId) return;
+    await applyFeedSection("recommended", rec.items || []);
+    setSectionLoading("panel-rec-music", false);
+    setStatus(`${rec.items?.length || 0} recomendados · ${feedCache.seed_label || "feed"}`);
+
+    void loadLazyFeedSections(fetchId, essentialOnly);
   } catch (e) {
-    if (isAudioOnly()) showWelcome();
+    if (fetchId !== feedFetchId) return;
+    if (!feedCache?.recommended?.length) showWelcome();
     setStatus(String(e));
   } finally {
-    recLoading = false;
-    if (btn) btn.disabled = false;
+    if (fetchId === feedFetchId && btn) btn.disabled = false;
   }
+}
+
+async function renderHomeFeed(feed) {
+  feedCache = feed;
+  showMusicHome();
+  await renderLocalFeedParts({
+    continue_listening: feed.continue_listening,
+    most_played: feed.most_played,
+    seed_label: feed.seed_label,
+  });
+  await applyFeedSection("recommended", feed.recommended || []);
+  await applyFeedSection("peers", feed.feed || []);
+  await applyFeedSection("new_artists", feed.new_artists || []);
+  await applyFeedSection("history_mix", feed.history_mix || []);
+
+  const any =
+    (feed.continue_listening?.length || 0) +
+      (feed.recommended?.length || 0) +
+      (feed.feed?.length || 0) +
+      (feed.most_played?.length || 0) +
+      (feed.new_artists?.length || 0) +
+      (feed.history_mix?.length || 0) >
+    0;
+  if (any) showMusicHome();
+  else showWelcome();
+}
+
+async function goHomeFeed(refresh = false) {
+  $("btn-nav-home")?.classList.add("active");
+  panelResults?.classList.add("hidden");
+  panelPlaylist?.classList.add("hidden");
+  document.querySelector(".main-inner")?.scrollTo({ top: 0, behavior: "smooth" });
+  setMdPath("promptub", "feed", "inicio");
+
+  showMusicHome();
+
+  if (feedCache) {
+    await renderHomeFeed(feedCache);
+    setStatus(refresh ? `atualizando · ${feedCache.seed_label || "feed"}` : `feed · ${feedCache.recommended?.length || 0} faixas`);
+  }
+
+  void loadHomeFeedProgressive({ force: true, essentialOnly: refresh });
 }
 
 async function buildRecommendedPlaylist() {
@@ -943,7 +773,7 @@ async function buildRecommendedPlaylist() {
   try {
     const res = await withLoading(
       LOADING_MSG.playlist,
-      "buscas paralelas · mix + titulo",
+      "buscas paralelas",
       async () =>
         tauriInvoke("recommended_playlist", {
           seedVideoId: lastVideoId || null,
@@ -957,7 +787,7 @@ async function buildRecommendedPlaylist() {
     await renderCards(playlistResultsEl, currentPlaylistItems, "Nenhuma faixa");
     $("btn-playlist-to-queue")?.classList.toggle("hidden", !currentPlaylistItems.length);
     showPlaylist();
-    setStatus(`REC.PL OK — ${res.count} TRACKS`);
+    setStatus(`rec.pl · ${res.count} tracks`);
     startPrewarm(currentPlaylistItems);
   } catch (e) {
     setStatus(String(e));
@@ -970,7 +800,7 @@ async function sendPlaylistToQueue() {
   if (!currentPlaylistItems.length) return;
   try {
     await tauriInvoke("load_queue", { items: currentPlaylistItems });
-    setStatus(`${currentPlaylistItems.length} TRACKS → QUEUE`);
+    setStatus(`${currentPlaylistItems.length} tracks → queue`);
     startPrewarm(currentPlaylistItems);
     refreshQueue();
   } catch (e) {
@@ -982,7 +812,7 @@ async function removeFromQueue(index) {
   try {
     await tauriInvoke("remove_queue_item", { index });
     refreshQueue();
-    setStatus("DEQUEUED");
+    setStatus("dequeued");
   } catch (e) {
     setStatus(String(e));
   }
@@ -990,34 +820,37 @@ async function removeFromQueue(index) {
 
 async function playFromQueue(index) {
   try {
-    if (!isAudioOnly()) {
-      videoPlayerBlock?.classList.remove("hidden");
-      showVideoBrowse();
-    }
     const v = await tauriInvoke("play_queue_item", { index });
-    if (v) {
-      lastVideoId = v.id;
-      updateVideoNowPlaying(v);
-      if (npTitle) npTitle.textContent = v.title;
-      if (npThumb) {
-        npThumb.src = thumbUrl(v);
-        npThumb.classList.remove("hidden");
-      }
-      if (!isAudioOnly()) {
-        buildVideoAutoplayPool(v);
-        await playVideoWeb(v);
-        primeRelatedLoads(v);
-      }
-      setStatus(LABELS[mode].playing);
-      refreshQueue();
-    }
+    if (v) await streamAndPlay(v);
   } catch (e) {
     setStatus(String(e));
   }
 }
 
+async function switchTrack(direction) {
+  if (trackSwitchInProgress) return;
+  trackSwitchInProgress = true;
+  try {
+    const v = await tauriInvoke(direction === "next" ? "next" : "prev");
+    if (v) await streamAndPlay(v);
+    else if (direction === "next") {
+      isPlaying = false;
+      updatePlayButton();
+      setStatus("fim da fila");
+    }
+  } catch (e) {
+    setStatus(String(e));
+  } finally {
+    trackSwitchInProgress = false;
+  }
+}
+
+async function playNextAuto() {
+  await switchTrack("next");
+}
+
 async function refreshQueue() {
-  if (!isAudioOnly() || !queueListEl) return;
+  if (!queueListEl) return;
   try {
     const q = await tauriInvoke("get_queue");
     queueListEl.replaceChildren();
@@ -1035,17 +868,14 @@ async function refreshQueue() {
 
       const body = document.createElement("div");
       body.className = "queue-item-body";
-
       const title = document.createElement("span");
       title.className = "queue-item-title";
       title.textContent = item.title;
       title.title = item.title;
       title.onclick = () => playFromQueue(i);
-
       const meta = document.createElement("span");
       meta.className = "queue-item-meta";
       meta.textContent = `${item.uploader || ""}${item.duration ? ` · ${item.duration}` : ""}`;
-
       body.append(title, meta);
 
       const btnRemove = document.createElement("button");
@@ -1064,98 +894,167 @@ async function refreshQueue() {
   } catch (_) {}
 }
 
-async function initQualitySelect() {
-  if (!qualitySelect) return;
-  try {
-    const q = await tauriInvoke("get_video_quality");
-    qualitySelect.value = q || "720";
-  } catch (_) {}
+function setupAudioPlayer() {
+  if (!htmlAudio) return;
+
+  htmlAudio.addEventListener("play", () => {
+    isPlaying = true;
+    updatePlayButton();
+  });
+
+  htmlAudio.addEventListener("pause", () => {
+    isPlaying = false;
+    updatePlayButton();
+  });
+
+  htmlAudio.addEventListener("ended", () => {
+    void playNextAuto();
+  });
+
+  htmlAudio.addEventListener("timeupdate", () => {
+    if (progressSeeking || !htmlAudio.duration) return;
+    if (progressSlider) {
+      progressSlider.value = String((htmlAudio.currentTime / htmlAudio.duration) * 100);
+    }
+    if (timeCurrent) timeCurrent.textContent = formatTime(htmlAudio.currentTime);
+    if (timeTotal) timeTotal.textContent = formatTime(htmlAudio.duration);
+    syncLyricsHighlight();
+  });
+
+  htmlAudio.addEventListener("loadedmetadata", () => {
+    if (timeTotal) timeTotal.textContent = formatTime(htmlAudio.duration);
+  });
+
+  htmlAudio.addEventListener("error", () => {
+    isPlaying = false;
+    updatePlayButton();
+    setStatus("Erro ao tocar stream — tente outra faixa");
+  });
+
+  progressSlider?.addEventListener("mousedown", () => {
+    progressSeeking = true;
+  });
+  progressSlider?.addEventListener("touchstart", () => {
+    progressSeeking = true;
+  });
+  progressSlider?.addEventListener("input", () => {
+    if (!htmlAudio.duration) return;
+    const pct = Number(progressSlider.value) / 100;
+    htmlAudio.currentTime = pct * htmlAudio.duration;
+    if (timeCurrent) timeCurrent.textContent = formatTime(htmlAudio.currentTime);
+  });
+  progressSlider?.addEventListener("change", () => {
+    progressSeeking = false;
+  });
+
+  volumeSlider?.addEventListener("input", (e) => {
+    if (htmlAudio) htmlAudio.volume = Number(e.target.value) / 100;
+  });
 }
 
 async function init() {
-  let boot = "music";
-  if (isTauri()) {
-    try {
-      boot = await tauriInvoke("boot_mode");
-    } catch (_) {}
-  }
-  applyMode(boot === "video" ? "video" : "music");
+  setupAudioPlayer();
   focusSearch();
 
   if (!isTauri()) {
     showWelcome();
-    setStatus("Modo preview — use o app promptub");
+    setStatus("modo preview — use o app promptub");
     return;
   }
+
+  showMusicHome();
+  setStatus("carregando feed…");
+
   try {
     await tauriInvoke("check_deps");
     loggedIn = await tauriInvoke("is_logged_in");
-    await initQualitySelect();
-    initHtmlVideoPlayer();
     try {
       const ver = await tauriInvoke("app_version");
-      if (npMode && ver) npMode.textContent = `${LABELS[mode].mode} · v${ver} · web`;
+      if (ver) updateModeLabel(`v${ver}`);
     } catch (_) {}
-    listen("queue-updated", () => refreshQueue()).catch(() => {});
+    listen("queue-updated", () => {
+      refreshQueue();
+      void prewarmNextInQueue();
+    }).catch(() => {});
     listen("queue-refill", (e) => {
       refreshQueue();
       const n = typeof e.payload === "number" ? e.payload : 0;
-      if (n > 0) setStatus(`FILA +${n} FAIXAS (auto)`);
+      if (n > 0) setStatus(`fila +${n} faixas`);
     }).catch(() => {});
     const badge = $("premium-badge");
     const btnPremium = $("btn-premium");
-    if (badge) badge.textContent = loggedIn ? "PREMIUM OK" : "MODO GRATUITO";
-    if (btnPremium) btnPremium.textContent = loggedIn ? "[ LOGOUT ]" : "[ AUTH ] PREMIUM";
-    await loadHomeFeed();
+    if (badge) badge.textContent = loggedIn ? "premium ok" : "modo gratuito";
+    if (btnPremium) btnPremium.textContent = loggedIn ? "[ LOGOUT ]" : "[ AUTH ] premium";
+
+    try {
+      const stored = await tauriInvoke("get_stored_feed");
+      if (stored) {
+        feedCache = stored;
+        await renderHomeFeed(stored);
+        setStatus(`feed salvo · ${stored.seed_label || "historico"}`);
+      }
+    } catch (_) {}
+
+    await loadHomeFeedProgressive({ force: true, essentialOnly: false });
   } catch (e) {
     showWelcome();
     setStatus(String(e));
   }
 }
 
-document.querySelectorAll(".tab").forEach((btn) => {
-  btn.addEventListener("click", async () => {
-    applyMode(btn.dataset.mode);
-    if (btn.dataset.mode === "music") await hideVideoPanel();
-    if (feedCache[mode]) {
-      await renderHomeFeed(feedCache[mode]);
-    } else {
-      await loadHomeFeed();
-    }
-  });
-});
+$("btn-logo-home")?.addEventListener("click", () => goHomeFeed(true));
 
-let resizeTimer;
-btnBackHomeFeed?.addEventListener("click", () => goToHomeFeed());
+$("btn-theme")?.addEventListener("click", () => toggleTheme());
 
-$("btn-search")?.addEventListener("click", search);
-$("btn-refresh-rec")?.addEventListener("click", () => loadHomeFeed(true));
-$("btn-refresh-rec-music")?.addEventListener("click", () => loadHomeFeed(true));
-$("btn-rec-playlist")?.addEventListener("click", buildRecommendedPlaylist);
-$("btn-playlist-to-queue")?.addEventListener("click", sendPlaylistToQueue);
+$("btn-nav-home")?.addEventListener("click", () => goHomeFeed(false));
 
-$("volume-slider")?.addEventListener("input", async (e) => {
-  const level = Number(e.target.value);
-  try {
-    if (!isAudioOnly() && htmlVideo) {
-      htmlVideo.volume = level / 100;
-    } else {
-      await tauriInvoke("set_volume", { level });
-    }
-  } catch (_) {}
-});
+$("btn-play-rec-row")?.addEventListener("click", () => playRow(feedCache?.recommended));
+$("btn-queue-rec-row")?.addEventListener("click", () => queueRow(feedCache?.recommended));
+$("btn-play-continue-row")?.addEventListener("click", () => playRow(feedCache?.continue_listening));
+$("btn-queue-continue-row")?.addEventListener("click", () => queueRow(feedCache?.continue_listening));
+$("btn-play-peers-row")?.addEventListener("click", () => playRow(feedCache?.feed));
+$("btn-queue-peers-row")?.addEventListener("click", () => queueRow(feedCache?.feed));
+$("btn-play-most-row")?.addEventListener("click", () => playRow(feedCache?.most_played));
+$("btn-queue-most-row")?.addEventListener("click", () => queueRow(feedCache?.most_played));
+$("btn-play-new-row")?.addEventListener("click", () => playRow(feedCache?.new_artists));
+$("btn-queue-new-row")?.addEventListener("click", () => queueRow(feedCache?.new_artists));
+$("btn-play-history-row")?.addEventListener("click", () => playRow(feedCache?.history_mix));
+$("btn-queue-history-row")?.addEventListener("click", () => queueRow(feedCache?.history_mix));
+$("btn-open-history-pl")?.addEventListener("click", buildRecommendedPlaylist);
 
-qualitySelect?.addEventListener("change", async () => {
-  try {
-    await tauriInvoke("set_video_quality", { quality: qualitySelect.value });
-    setStatus(`QUAL ${qualitySelect.value === "best" ? "MAX" : qualitySelect.value + "p"}`);
-    if (!isAudioOnly() && currentVideo) {
-      await playVideoWeb(currentVideo);
-    }
-  } catch (e) {
-    setStatus(String(e));
+document.addEventListener("keydown", (e) => {
+  const tag = e.target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA") {
+    if (e.key === "Escape") e.target.blur();
+    return;
+  }
+  if (e.code === "Space") {
+    e.preventDefault();
+    btnStop?.click();
+  } else if (e.key === "ArrowRight" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    $("btn-next")?.click();
+  } else if (e.key === "ArrowLeft" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    $("btn-prev")?.click();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    adjustVolume(VOLUME_STEP);
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    adjustVolume(-VOLUME_STEP);
   }
 });
+
+$("btn-refresh-rec-music")?.addEventListener("click", () => {
+  if (feedCache) {
+    void renderHomeFeed(feedCache);
+    setStatus(`atualizando · ${feedCache.seed_label || "feed"}`);
+  }
+  void loadHomeFeedProgressive({ force: true, essentialOnly: false });
+});
+$("btn-rec-playlist")?.addEventListener("click", buildRecommendedPlaylist);
+$("btn-playlist-to-queue")?.addEventListener("click", sendPlaylistToQueue);
 
 searchInput?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
@@ -1164,34 +1063,34 @@ searchInput?.addEventListener("keydown", (e) => {
   }
 });
 
-$("btn-stop")?.addEventListener("click", async () => {
-  try {
-    if (!isAudioOnly()) {
-      stopVideoWeb();
-      currentVideo = null;
+$("btn-search")?.addEventListener("click", () => search());
+
+btnStop?.addEventListener("click", async () => {
+  if (!htmlAudio) return;
+  if (isPlaying) {
+    htmlAudio.pause();
+    setStatus("pausado");
+  } else if (htmlAudio.src) {
+    try {
+      await htmlAudio.play();
+      setStatus("tocando · web");
+    } catch (e) {
+      setStatus(String(e));
     }
-    await tauriInvoke("stop");
-    await hideVideoPanel();
-    setStatus("STREAM STOPPED");
+  } else {
     focusSearch();
-  } catch (e) {
-    setStatus(String(e));
   }
 });
 
-$("btn-next")?.addEventListener("click", () => {
-  void playNextRecommendedVideo();
-});
+$("btn-next")?.addEventListener("click", () => void switchTrack("next"));
 
-$("btn-prev")?.addEventListener("click", () => {
-  void playPrevRecommendedVideo();
-});
+$("btn-prev")?.addEventListener("click", () => void switchTrack("prev"));
 
 $("btn-clear-queue")?.addEventListener("click", async () => {
   try {
     await tauriInvoke("clear_queue");
     refreshQueue();
-    setStatus("QUEUE CLEARED");
+    setStatus("queue cleared");
   } catch (e) {
     setStatus(String(e));
   }
@@ -1202,17 +1101,17 @@ $("btn-premium")?.addEventListener("click", async () => {
     if (loggedIn) {
       await tauriInvoke("logout");
       loggedIn = false;
-      setStatus("AUTH DISCONNECTED");
+      setStatus("auth disconnected");
     } else {
-      setStatus("Abrindo login…");
+      setStatus("abrindo login…");
       await tauriInvoke("login");
       loggedIn = true;
-      setStatus("AUTH OK — PREMIUM");
+      setStatus("auth ok · premium");
     }
     const badge = $("premium-badge");
     const btnPremium = $("btn-premium");
-    if (badge) badge.textContent = loggedIn ? "PREMIUM OK" : "MODO GRATUITO";
-    if (btnPremium) btnPremium.textContent = loggedIn ? "[ LOGOUT ]" : "[ AUTH ] PREMIUM";
+    if (badge) badge.textContent = loggedIn ? "premium ok" : "modo gratuito";
+    if (btnPremium) btnPremium.textContent = loggedIn ? "[ LOGOUT ]" : "[ AUTH ] premium";
   } catch (e) {
     setStatus(`Login: ${e}`);
   }

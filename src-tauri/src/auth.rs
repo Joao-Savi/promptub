@@ -15,16 +15,11 @@ const USER: &str = "youtube-session";
 
 const SUCCESS_HTML: &str = r#"<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>promptub</title>
 <style>body{font-family:system-ui;background:#0f0f0f;color:#f1f1f1;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-.card{text-align:center;padding:2rem 3rem;border-radius:12px;background:#212121;max-width:420px}h1{color:#1ed760}p{color:#aaa}</style></head>
+.card{text-align:center;padding:2rem 3rem;border-radius:12px;background:#212121;max-width:420px}h1{color:#ff3344}p{color:#aaa}</style></head>
 <body><div class="card"><h1>promptub</h1><p>Conta conectada. Pode fechar esta aba.</p></div></body></html>"#;
 
 #[tauri::command]
 pub fn is_logged_in() -> bool {
-    has_session_cookies()
-}
-
-#[tauri::command]
-pub fn has_premium_session() -> bool {
     has_session_cookies()
 }
 
@@ -55,7 +50,6 @@ pub fn logout(state: State<'_, Arc<AppState>>) -> Result<(), String> {
         let _ = entry.delete_credential();
     }
     state.set_cookies(String::new());
-    state.player.lock().set_cookies(String::new());
     Ok(())
 }
 
@@ -63,7 +57,6 @@ pub fn load_cookies(state: &Arc<AppState>) {
     if let Ok(cookies) = Entry::new(SERVICE, USER).and_then(|e| e.get_password()) {
         if let Ok(path) = write_session_file(&cookies) {
             state.set_cookies(path.clone());
-            state.player.lock().set_cookies(path);
         }
     }
 }
@@ -75,7 +68,6 @@ fn apply_session(state: &Arc<AppState>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let path = write_session_file(&cookies)?;
     state.set_cookies(path.clone());
-    state.player.lock().set_cookies(path);
     Ok(())
 }
 
@@ -137,7 +129,7 @@ fn handle_request(mut stream: TcpStream, port: u16) -> Option<()> {
         r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="1;url={google}"></head>
 <body style="background:#0f0f0f;color:#aaa;font-family:system-ui;text-align:center;padding:3rem">
 <p>Redirecionando para login…</p>
-<p style="font-size:.85rem;margin-top:2rem">Depois de entrar, visite <a href="http://127.0.0.1:{port}/done" style="color:#1ed760">concluir login</a></p>
+<p style="font-size:.85rem;margin-top:2rem">Depois de entrar, visite <a href="http://127.0.0.1:{port}/done" style="color:#ff3344">concluir login</a></p>
 </body></html>"#
     );
     respond_html(stream, &html);
@@ -194,7 +186,31 @@ fn write_session_file(cookies: &str) -> Result<String, String> {
     let dir = dirs_session_dir()?;
     let path = dir.join("cookies.txt");
     fs::write(&path, cookies).map_err(|e| e.to_string())?;
+    restrict_session_file(&path);
     Ok(path.to_string_lossy().into())
+}
+
+fn restrict_session_file(path: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        let Some(path_str) = path.to_str() else {
+            return;
+        };
+        let Ok(username) = std::env::var("USERNAME") else {
+            return;
+        };
+        if username.is_empty() {
+            return;
+        }
+        let _ = hidden_cmd("icacls")
+            .args([
+                path_str,
+                "/inheritance:r",
+                "/grant:r",
+                &format!("{username}:R"),
+            ])
+            .output();
+    }
 }
 
 fn dirs_session_dir() -> Result<std::path::PathBuf, String> {
