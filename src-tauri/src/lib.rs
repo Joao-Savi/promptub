@@ -98,6 +98,7 @@ pub fn run() {
             feed_cache::save_stored_feed,
             feed_sections::home_feed_local,
             feed_sections::home_feed_section,
+            feed_sections::home_feed_genres,
             recommend::recommended_playlist,
             player::resolve_stream,
             player::play,

@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.1] — 2026-08-03
+
+### Fila, playlists e generos
+- **Antes:** artista repetia no maximo 1x; sem playlist por artista; generos misturados
+- **Agora:** ate 2 faixas diferentes por artista na fila; `[ ART.PL ]` (playlist do artista); `[ MIX ]` (misturadao); secoes separadas por genero no feed
+
+---
+
 ## [0.5.0] — 2026-08-03
 
 ### Algoritmo da fila e gosto

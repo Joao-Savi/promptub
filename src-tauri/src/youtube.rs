@@ -159,6 +159,12 @@ use crate::state::SharedState;
 use tauri::State;
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct GenreFeedRow {
+    pub label: String,
+    pub items: Vec<Video>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HomeFeed {
     pub recommended: Vec<Video>,
     #[serde(default)]
@@ -169,6 +175,8 @@ pub struct HomeFeed {
     pub new_artists: Vec<Video>,
     #[serde(default)]
     pub history_mix: Vec<Video>,
+    #[serde(default)]
+    pub genre_rows: Vec<GenreFeedRow>,
     pub seed_label: String,
     pub feed: Vec<Video>,
 }

@@ -16,10 +16,11 @@ SemVer: `MAJOR.MINOR.PATCH`
 - `INSTALAR.cmd` → `WANT`
 - `CHANGELOG.md`
 
-## Versão atual: **0.5.0**
+## Versão atual: **0.5.1**
 
 | Versão | Tipo | Resumo |
 |--------|------|--------|
+| **0.5.1** | PATCH | ART.PL, MIX, generos separados no feed; fila permite 2 faixas/artista |
 | **0.5.0** | MINOR | Like/dislike; algoritmo de fila personalizado por genero e gosto |
 | **0.4.3** | PATCH | Atalho desktop com icone vermelho explicito |
 | **0.4.1** | PATCH | Tema vermelho; instalador limpo; segurança |

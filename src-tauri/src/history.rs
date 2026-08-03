@@ -250,6 +250,15 @@ impl WatchHistory {
         parts.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
     }
 
+    pub fn genre_trends(&self, limit: usize) -> Vec<crate::discover::GenreTrend> {
+        let entries: Vec<(Video, u32)> = self
+            .recent_music
+            .iter()
+            .map(|e| (e.video.clone(), e.play_count))
+            .collect();
+        crate::discover::compute_genre_trends(&entries, limit)
+    }
+
     pub fn known_uploaders(&self) -> std::collections::HashSet<String> {
         self.recent_music
             .iter()

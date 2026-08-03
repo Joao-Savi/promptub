@@ -106,6 +106,12 @@
             <button id="btn-rec-playlist" class="btn-accent" title="Montar playlist com base no seu gosto">
               [ REC.PL ]
             </button>
+            <button id="btn-artist-playlist" class="btn-accent" title="Playlist só do artista buscado">
+              [ ART.PL ]
+            </button>
+            <button id="btn-mixed-playlist" class="btn-accent" title="Misturadao dos seus generos">
+              [ MIX ]
+            </button>
           </header>
 
           <div id="music-shell" class="music-shell">
@@ -139,6 +145,8 @@
                 </div>
                 <div id="recommended-music" class="feed-row"></div>
               </section>
+
+              <div id="genre-rows-mount" class="genre-rows-mount"></div>
 
               <section id="panel-genre-peers" class="feed-section">
                 <div class="section-header">
@@ -203,7 +211,7 @@
 
             <section id="panel-welcome" class="panel md-doc">
               <pre class="welcome-ascii" aria-hidden="true"><code>╔══════════════════════════════════════╗
-║  PROMPTUB v0.5.0  //  TERMINAL         ║
+║  PROMPTUB v0.5.1  //  TERMINAL         ║
 ║  player: HTML5 · stream: yt-dlp      ║
 ╚══════════════════════════════════════╝</code></pre>
               <h2 id="welcome-title">Bem-vindo</h2>

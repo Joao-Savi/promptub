@@ -20,6 +20,48 @@ pub struct FeedSectionResult {
     pub items: Vec<Video>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct GenreRowsResult {
+    pub rows: Vec<crate::youtube::GenreFeedRow>,
+}
+
+pub fn build_genre_rows(
+    cookies: &str,
+    history: &WatchHistory,
+    last_search: &str,
+    rotation: usize,
+    exclude_ids: &[String],
+) -> Result<Vec<crate::youtube::GenreFeedRow>, String> {
+    let trends = history.genre_trends(3);
+    if trends.len() < 2 {
+        return Ok(vec![]);
+    }
+
+    let mut seen: HashSet<String> = exclude_ids.iter().cloned().collect();
+    for id in history.played_ids() {
+        seen.insert(id);
+    }
+
+    let mut rows = Vec::new();
+    for trend in trends {
+        let items = music_recommend::build_genre_trend_row(
+            cookies,
+            &trend,
+            history,
+            last_search,
+            rotation,
+            &mut seen,
+        )?;
+        if !items.is_empty() {
+            rows.push(crate::youtube::GenreFeedRow {
+                label: trend.label,
+                items,
+            });
+        }
+    }
+    Ok(rows)
+}
+
 pub fn build_local_parts(history: &WatchHistory, last_search: &str, seed: Option<Video>) -> FeedLocal {
     FeedLocal {
         continue_listening: history.continue_listening(8),
@@ -135,4 +177,20 @@ pub async fn home_feed_section(
     })
     .await
     .map_err(|e| format!("feed_section: {e}"))?
+}
+
+#[tauri::command]
+pub async fn home_feed_genres(
+    state: tauri::State<'_, SharedState>,
+    exclude_ids: Vec<String>,
+) -> Result<GenreRowsResult, String> {
+    let (history, _, last_search, rotation) = feed_context(&state);
+    let cookies = state.cookies();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let rows = build_genre_rows(&cookies, &history, &last_search, rotation, &exclude_ids)?;
+        Ok(GenreRowsResult { rows })
+    })
+    .await
+    .map_err(|e| format!("feed_genres: {e}"))?
 }

@@ -1,10 +1,10 @@
 //! Recomendacoes de musica com variedade por genero/artista (estilo YouTube Music).
 
 use crate::discover::{
-    artist_key, build_music_context_rich, contextual_search_queries,
+    artist_key, artist_matches_query, build_music_context_rich, contextual_search_queries,
     cold_start_queries, extract_artist_label, filter_playable, filter_relevant,
-    interleave_sources, peer_artists, pick_diverse_candidates, pick_new_artists,
-    refine_search_results,
+    interleave_sources, is_playable_track, peer_artists, pick_diverse_candidates,
+    pick_new_artists, pick_with_limits, refine_search_results, PickLimits,
 };
 use crate::history::{TasteProfile, WatchHistory};
 use crate::youtube::{self, Video};
@@ -522,4 +522,213 @@ pub fn build_history_playlist(
 
     playlist.truncate(25);
     Ok((playlist, seed_label))
+}
+
+const ARTIST_PL_LIMIT: usize = 25;
+const MIXED_PL_LIMIT: usize = 25;
+const GENRE_ROW_LIMIT: usize = 8;
+
+/// Playlist so do artista buscado — varias faixas diferentes, mesmo artista.
+pub fn build_artist_playlist(
+    cookies: &str,
+    artist_query: &str,
+    history: &WatchHistory,
+) -> Result<(Vec<Video>, String), String> {
+    let q = artist_query.trim();
+    if q.len() < 2 {
+        return Err("Digite o nome do artista na busca.".into());
+    }
+
+    let mut seen = history.played_ids();
+    for id in history.blocked_ids() {
+        seen.insert(id);
+    }
+    let exclude_fps = history.played_fingerprints();
+    let taste = history.taste.clone();
+
+    let queries = [
+        format!("{q} musica"),
+        format!("{q} audio oficial"),
+        format!("{q} hits"),
+        format!("{q} melhores"),
+    ];
+
+    let mut sources: Vec<Vec<Video>> = Vec::new();
+    for query in &queries {
+        if let Ok(items) = youtube::fetch_search(cookies, query, 10) {
+            let filtered: Vec<Video> = items
+                .into_iter()
+                .filter(|v| artist_matches_query(v, q) && is_playable_track(v))
+                .collect();
+            if !filtered.is_empty() {
+                sources.push(filtered);
+            }
+        }
+    }
+
+    if sources.is_empty() {
+        return Err(format!("Nenhuma musica encontrada para \"{q}\"."));
+    }
+
+    let interleaved = interleave_sources(sources);
+    let label = interleaved
+        .first()
+        .map(extract_artist_label)
+        .unwrap_or_else(|| q.to_string());
+
+    let playlist = pick_with_limits(
+        interleaved,
+        &seen,
+        &exclude_fps,
+        &HashMap::new(),
+        "",
+        ARTIST_PL_LIMIT,
+        None,
+        Some(&taste),
+        &PickLimits::artist_focus(),
+    );
+
+    if playlist.is_empty() {
+        return Err(format!("Nao foi possivel montar playlist de \"{q}\"."));
+    }
+
+    Ok((playlist, format!("artista · {label}")))
+}
+
+/// Misturadao — mistura os generos que o ouvinte mais escuta.
+pub fn build_mixed_playlist(
+    cookies: &str,
+    history: &WatchHistory,
+    last_search: &str,
+) -> Result<(Vec<Video>, String), String> {
+    let trends = history.genre_trends(4);
+    if trends.is_empty() {
+        let q = if last_search.trim().is_empty() {
+            None
+        } else {
+            Some(last_search.trim())
+        };
+        return build_history_playlist(
+            cookies,
+            history,
+            history.music_seed(),
+            q,
+            last_search,
+        )
+        .map(|(items, _)| (items, "misturadao · seu gosto".into()));
+    }
+
+    let mut seen = history.played_ids();
+    for id in history.blocked_ids() {
+        seen.insert(id);
+    }
+    let exclude_fps = history.played_fingerprints();
+    let taste = history.taste.clone();
+
+    let seed = history.music_seed().or_else(|| history.top_music(1).into_iter().next());
+    let mut sources: Vec<Vec<Video>> = Vec::new();
+
+    for trend in &trends {
+        let fake_seed = seed.clone().unwrap_or(Video {
+            id: String::new(),
+            title: trend.style.clone(),
+            uploader: trend.label.clone(),
+            duration: "3:00".into(),
+            url: String::new(),
+            thumbnail: String::new(),
+            is_live: false,
+        });
+        let ctx = build_music_context_rich(&format!("{} {}", trend.style, last_search), &fake_seed);
+        let per_genre = (MIXED_PL_LIMIT / trends.len().max(1)).max(4);
+        for query in [
+            format!("{} musica", trend.style),
+            format!("{} 2024", trend.style),
+        ] {
+            if let Ok(items) = youtube::fetch_search(cookies, &query, per_genre + 2) {
+                sources.push(filter_relevant(&ctx, items));
+            }
+        }
+    }
+
+    let interleaved = interleave_sources(sources);
+    let labels: Vec<String> = trends.iter().map(|t| t.label.clone()).collect();
+    let seed_label = format!("misturadao · {}", labels.join(" + "));
+
+    let playlist = pick_with_limits(
+        interleaved,
+        &seen,
+        &exclude_fps,
+        &HashMap::new(),
+        "",
+        MIXED_PL_LIMIT,
+        None,
+        Some(&taste),
+        &PickLimits::mixed(),
+    );
+
+    if playlist.is_empty() {
+        return Err("Nao foi possivel montar o misturadao.".into());
+    }
+
+    Ok((playlist, seed_label))
+}
+
+/// Linha do feed para um genero especifico do ouvinte.
+pub fn build_genre_trend_row(
+    cookies: &str,
+    trend: &crate::discover::GenreTrend,
+    history: &WatchHistory,
+    last_search: &str,
+    rotation: usize,
+    seen: &mut HashSet<String>,
+) -> Result<Vec<Video>, String> {
+    let exclude_fps = history.played_fingerprints();
+    let taste = &history.taste;
+
+    let fake_seed = Video {
+        id: String::new(),
+        title: trend.style.clone(),
+        uploader: trend.label.clone(),
+        duration: "3:00".into(),
+        url: String::new(),
+        thumbnail: String::new(),
+        is_live: false,
+    };
+    let ctx = build_music_context_rich(&format!("{} {}", trend.style, last_search), &fake_seed);
+
+    let queries: Vec<String> = rotate_pick_queries(&trend.style, rotation);
+    let sources: Vec<Vec<Video>> = parallel_fetch_searches(cookies, &queries, 6)
+        .into_iter()
+        .map(|items| filter_relevant(&ctx, items))
+        .collect();
+
+    let interleaved = interleave_sources(sources);
+    let picked = pick_with_limits(
+        interleaved,
+        seen,
+        &exclude_fps,
+        &HashMap::new(),
+        "",
+        GENRE_ROW_LIMIT,
+        Some(&ctx),
+        Some(taste),
+        &PickLimits::balanced(),
+    );
+
+    for v in &picked {
+        seen.insert(v.id.clone());
+    }
+    Ok(picked)
+}
+
+fn rotate_pick_queries(style: &str, rotation: usize) -> Vec<String> {
+    let pool = [
+        format!("{style} musica"),
+        format!("{style} 2024"),
+        format!("{style} hits"),
+    ];
+    let start = rotation % pool.len();
+    (0..pool.len())
+        .map(|i| pool[(start + i) % pool.len()].clone())
+        .collect()
 }

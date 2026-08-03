@@ -288,7 +288,125 @@ pub fn interleave_sources(sources: Vec<Vec<Video>>) -> Vec<Video> {
     out
 }
 
-/// Evita repetir artista/faixa — max 1 por artista por lote, com score de gosto.
+/// Limites de diversidade na selecao de faixas.
+#[derive(Clone, Debug)]
+pub struct PickLimits {
+    pub max_per_artist: usize,
+    pub max_seed_artist: usize,
+    pub queue_soft_share: f32,
+    pub enforce_genre: bool,
+}
+
+impl PickLimits {
+    pub fn balanced() -> Self {
+        Self {
+            max_per_artist: 2,
+            max_seed_artist: 1,
+            queue_soft_share: 0.38,
+            enforce_genre: true,
+        }
+    }
+
+    pub fn artist_focus() -> Self {
+        Self {
+            max_per_artist: 30,
+            max_seed_artist: 30,
+            queue_soft_share: 1.0,
+            enforce_genre: false,
+        }
+    }
+
+    pub fn mixed() -> Self {
+        Self {
+            max_per_artist: 1,
+            max_seed_artist: 0,
+            queue_soft_share: 0.3,
+            enforce_genre: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GenreTrend {
+    pub label: String,
+    pub style: String,
+    pub weight: f32,
+}
+
+/// Generos que o ouvinte mais escuta (ponderado por play_count).
+pub fn compute_genre_trends(
+    entries: &[(Video, u32)],
+    limit: usize,
+) -> Vec<GenreTrend> {
+    let mut profile_scores: HashMap<usize, u32> = HashMap::new();
+    let mut total = 0u32;
+
+    for (video, weight) in entries.iter().take(32) {
+        let blob = normalize_text(&format!("{} {}", video.title, video.uploader));
+        for (i, profile) in GENRE_PROFILES.iter().enumerate() {
+            if profile
+                .triggers
+                .iter()
+                .any(|t| blob.contains(&normalize_text(t)))
+            {
+                *profile_scores.entry(i).or_insert(0) += weight;
+                total += weight;
+            }
+        }
+    }
+
+    if total == 0 {
+        return Vec::new();
+    }
+
+    let mut ranked: Vec<(usize, u32)> = profile_scores.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1));
+
+    ranked
+        .into_iter()
+        .take(limit)
+        .filter(|(_, score)| *score as f32 / total as f32 >= 0.12)
+        .map(|(idx, score)| {
+            let profile = &GENRE_PROFILES[idx];
+            let style = profile.styles.first().copied().unwrap_or("musica").to_string();
+            let label = style
+                .split_whitespace()
+                .next()
+                .unwrap_or("musica")
+                .to_string();
+            GenreTrend {
+                label: capitalize_word(&label),
+                style,
+                weight: score as f32 / total as f32,
+            }
+        })
+        .collect()
+}
+
+fn capitalize_word(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+pub fn artist_matches_query(v: &Video, query: &str) -> bool {
+    let q = normalize_uploader(query);
+    if q.len() < 2 {
+        return false;
+    }
+    let ak = artist_key(v);
+    let label = normalize_uploader(&extract_artist_label(v));
+    ak == q
+        || label == q
+        || ak.contains(&q)
+        || q.contains(&ak)
+        || label.contains(&q)
+        || q.contains(&label)
+}
+
+/// Seleciona faixas com diversidade configuravel (padrao: balanceado).
 pub fn pick_diverse_candidates(
     candidates: Vec<Video>,
     exclude_ids: &HashSet<String>,
@@ -299,12 +417,35 @@ pub fn pick_diverse_candidates(
     ctx: Option<&MusicContext>,
     taste: Option<&crate::history::TasteProfile>,
 ) -> Vec<Video> {
+    pick_with_limits(
+        candidates,
+        exclude_ids,
+        exclude_fingerprints,
+        queue_counts,
+        seed_artist,
+        limit,
+        ctx,
+        taste,
+        &PickLimits::balanced(),
+    )
+}
+
+pub fn pick_with_limits(
+    candidates: Vec<Video>,
+    exclude_ids: &HashSet<String>,
+    exclude_fingerprints: &HashSet<String>,
+    queue_counts: &HashMap<String, usize>,
+    seed_artist: &str,
+    limit: usize,
+    ctx: Option<&MusicContext>,
+    taste: Option<&crate::history::TasteProfile>,
+    limits: &PickLimits,
+) -> Vec<Video> {
     let playable: Vec<Video> = filter_playable(candidates);
     let queue_len = queue_counts.values().sum::<usize>().max(1);
     let seed_key = normalize_uploader(seed_artist);
 
     let mut scored: Vec<(i32, Video)> = Vec::new();
-    let mut batch_artists: HashMap<String, usize> = HashMap::new();
 
     for v in playable {
         if exclude_ids.contains(&v.id) {
@@ -322,31 +463,30 @@ pub fn pick_diverse_candidates(
         }
 
         if let Some(c) = ctx {
-            if !is_relevant(c, &v) || has_cross_genre_conflict(c, &v) {
+            if !is_relevant(c, &v) {
+                continue;
+            }
+            if limits.enforce_genre && has_cross_genre_conflict(c, &v) {
                 continue;
             }
         }
 
         let artist = artist_key(&v);
+        let mut score = ctx.map(|c| relevance_score(c, &v)).unwrap_or(0);
+
         if !artist.is_empty() {
-            let in_batch = batch_artists.get(&artist).copied().unwrap_or(0);
-            if in_batch >= 1 {
-                continue;
-            }
             let in_queue = queue_counts.get(&artist).copied().unwrap_or(0);
             let queue_share = in_queue as f32 / queue_len as f32;
-            if queue_share > 0.2 && artist != seed_key {
-                continue;
+            if queue_share > limits.queue_soft_share {
+                score -= 35;
             }
             if !seed_key.is_empty() && artist == seed_key {
-                continue;
+                score -= 12;
             }
         }
 
-        let mut score = ctx.map(|c| relevance_score(c, &v)).unwrap_or(0);
         if let Some(t) = taste {
-            let st = t.state_for(&v);
-            match st {
+            match t.state_for(&v) {
                 crate::history::TasteState::Liked => score += 40,
                 crate::history::TasteState::Disliked => continue,
                 crate::history::TasteState::None => {}
@@ -358,16 +498,31 @@ pub fn pick_diverse_candidates(
 
     scored.sort_by(|a, b| b.0.cmp(&a.0));
 
+    let mut batch_artist_count: HashMap<String, usize> = HashMap::new();
+    let mut batch_fps: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
+
     for (_, v) in scored {
+        let fp = title_fingerprint(&v);
+        if batch_fps.contains(&fp) {
+            continue;
+        }
+
         let artist = artist_key(&v);
         if !artist.is_empty() {
-            let in_batch = batch_artists.get(&artist).copied().unwrap_or(0);
-            if in_batch >= 1 {
+            let count = batch_artist_count.get(&artist).copied().unwrap_or(0);
+            let cap = if !seed_key.is_empty() && artist == seed_key {
+                limits.max_seed_artist.max(limits.max_per_artist)
+            } else {
+                limits.max_per_artist
+            };
+            if count >= cap {
                 continue;
             }
-            batch_artists.insert(artist, 1);
+            batch_artist_count.insert(artist, count + 1);
         }
+
+        batch_fps.insert(fp);
         out.push(v);
         if out.len() >= limit {
             break;

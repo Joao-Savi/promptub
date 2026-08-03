@@ -570,6 +570,7 @@ function emptyFeed() {
     most_played: [],
     new_artists: [],
     history_mix: [],
+    genre_rows: [],
     feed: [],
     seed_label: "",
   };
@@ -590,7 +591,56 @@ function collectFeedIds() {
       if (v?.id) ids.add(v.id);
     }
   }
+  for (const row of feedCache.genre_rows || []) {
+    for (const v of row.items || []) {
+      if (v?.id) ids.add(v.id);
+    }
+  }
   return [...ids];
+}
+
+async function renderGenreRowsMount(rows) {
+  const mount = $("genre-rows-mount");
+  if (!mount) return;
+  mount.replaceChildren();
+  if (!rows?.length) return;
+
+  for (const row of rows) {
+    const section = document.createElement("section");
+    section.className = "feed-section";
+
+    const header = document.createElement("div");
+    header.className = "section-header";
+
+    const info = document.createElement("div");
+    const h2 = document.createElement("h2");
+    h2.textContent = row.label;
+    const sub = document.createElement("p");
+    sub.className = "muted";
+    sub.textContent = `${row.items?.length || 0} faixas · seu gosto`;
+    info.append(h2, sub);
+
+    const btnPlay = document.createElement("button");
+    btnPlay.className = "btn-accent";
+    btnPlay.textContent = "[ PLAY ]";
+    btnPlay.onclick = () => playRow(row.items);
+
+    const btnQueue = document.createElement("button");
+    btnQueue.className = "btn-accent";
+    btnQueue.textContent = "[ +FILA ]";
+    btnQueue.onclick = () => queueRow(row.items);
+
+    header.append(info, btnPlay, btnQueue);
+    section.append(header);
+
+    const rowEl = document.createElement("div");
+    rowEl.className = "feed-row";
+    await renderFeedRow(rowEl, row.items || [], "");
+    section.append(rowEl);
+
+    mount.append(section);
+    void prewarmFeedItems(row.items);
+  }
 }
 
 function setSectionLoading(panelId, loading) {
@@ -689,8 +739,8 @@ async function loadLazyFeedSections(fetchId, essentialOnly = false) {
     { key: "history_mix", panel: "panel-history-mix" },
   ];
 
-  await Promise.all(
-    sections.map(async ({ key, panel }) => {
+  await Promise.all([
+    ...sections.map(async ({ key, panel }) => {
       setSectionLoading(panel, true);
       try {
         const res = await tauriInvoke("home_feed_section", {
@@ -701,8 +751,19 @@ async function loadLazyFeedSections(fetchId, essentialOnly = false) {
         await applyFeedSection(key, res.items || []);
       } catch (_) {}
       setSectionLoading(panel, false);
-    })
-  );
+    }),
+    (async () => {
+      try {
+        const res = await tauriInvoke("home_feed_genres", {
+          excludeIds: collectFeedIds(),
+        });
+        if (fetchId !== feedFetchId) return;
+        if (!feedCache) feedCache = emptyFeed();
+        feedCache.genre_rows = res.rows || [];
+        await renderGenreRowsMount(feedCache.genre_rows);
+      } catch (_) {}
+    })(),
+  ]);
 
   if (fetchId === feedFetchId && feedCache) {
     try {
@@ -762,14 +823,17 @@ async function renderHomeFeed(feed) {
   await applyFeedSection("peers", feed.feed || []);
   await applyFeedSection("new_artists", feed.new_artists || []);
   await applyFeedSection("history_mix", feed.history_mix || []);
+  await renderGenreRowsMount(feed.genre_rows || []);
 
+  const genreCount = (feed.genre_rows || []).reduce((n, r) => n + (r.items?.length || 0), 0);
   const any =
     (feed.continue_listening?.length || 0) +
       (feed.recommended?.length || 0) +
       (feed.feed?.length || 0) +
       (feed.most_played?.length || 0) +
       (feed.new_artists?.length || 0) +
-      (feed.history_mix?.length || 0) >
+      (feed.history_mix?.length || 0) +
+      genreCount >
     0;
   if (any) showMusicHome();
   else showWelcome();
@@ -792,33 +856,44 @@ async function goHomeFeed(refresh = false) {
   void loadHomeFeedProgressive({ force: true, essentialOnly: refresh });
 }
 
-async function buildRecommendedPlaylist() {
-  const btn = $("btn-rec-playlist");
+async function buildPlaylist(mode = "personal", title = "Playlist recomendada") {
+  const btnIds = {
+    personal: "btn-rec-playlist",
+    artist: "btn-artist-playlist",
+    mixed: "btn-mixed-playlist",
+  };
+  const btn = $(btnIds[mode] || "btn-rec-playlist");
   if (btn) btn.disabled = true;
   try {
     const res = await withLoading(
       LOADING_MSG.playlist,
-      "buscas paralelas",
+      mode === "artist" ? "buscando faixas do artista" : "buscas paralelas",
       async () =>
         tauriInvoke("recommended_playlist", {
           seedVideoId: lastVideoId || null,
           seedQuery: searchInput?.value.trim() || null,
+          mode,
         })
     );
     currentPlaylistItems = res.items || [];
+    if ($("playlist-title")) $("playlist-title").textContent = title;
     if (playlistSubtitle) {
-      playlistSubtitle.textContent = `Baseado em: ${res.seed_label} · ${res.count} faixas`;
+      playlistSubtitle.textContent = `${res.seed_label} · ${res.count} faixas`;
     }
     await renderCards(playlistResultsEl, currentPlaylistItems, "Nenhuma faixa");
     $("btn-playlist-to-queue")?.classList.toggle("hidden", !currentPlaylistItems.length);
     showPlaylist();
-    setStatus(`rec.pl · ${res.count} tracks`);
+    setStatus(`${mode} · ${res.count} tracks`);
     startPrewarm(currentPlaylistItems);
   } catch (e) {
     setStatus(String(e));
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+async function buildRecommendedPlaylist() {
+  return buildPlaylist("personal", "Playlist recomendada");
 }
 
 async function sendPlaylistToQueue() {
@@ -1079,6 +1154,12 @@ $("btn-refresh-rec-music")?.addEventListener("click", () => {
   void loadHomeFeedProgressive({ force: true, essentialOnly: false });
 });
 $("btn-rec-playlist")?.addEventListener("click", buildRecommendedPlaylist);
+$("btn-artist-playlist")?.addEventListener("click", () =>
+  buildPlaylist("artist", "Playlist do artista")
+);
+$("btn-mixed-playlist")?.addEventListener("click", () =>
+  buildPlaylist("mixed", "Misturadao")
+);
 $("btn-playlist-to-queue")?.addEventListener("click", sendPlaylistToQueue);
 
 searchInput?.addEventListener("keydown", (e) => {
