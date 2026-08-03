@@ -15,6 +15,8 @@ SemVer: `MAJOR.MINOR.PATCH`
 - `package.json`
 - `INSTALAR.cmd` → `WANT`
 - `CHANGELOG.md`
+- `README.md`
+- `index.html` (banner welcome)
 
 ## Versão atual: **0.5.1**
 

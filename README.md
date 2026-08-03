@@ -12,12 +12,13 @@ Player desktop de **YouTube / YouTube Music** para Windows — interface estilo 
 
 O **promptub** abre uma janela nativa pequena (~80–150 MB de RAM) para buscar, ouvir e montar filas — sem abrir o Chrome no dia a dia.
 
-| Antes (v0.3.x) | Agora (v0.4.x) |
+| Antes (v0.3.x) | Agora (v0.5.x) |
 |----------------|----------------|
 | Player **mpv** externo | **HTML5 `<audio>`** dentro do app |
 | Tema verde terminal | **Noite:** preto + vermelho · **Dia:** branco + preto |
 | Modo vídeo | Removido — só áudio |
-| Feed monolítico | Feed **progressivo** por seção |
+| Feed monolítico | Feed **progressivo** por seção + **gêneros separados** |
+| Fila repetitiva | Fila **personalizada** (gosto, like/dislike, gênero) |
 
 ---
 
@@ -37,9 +38,11 @@ O **promptub** abre uma janela nativa pequena (~80–150 MB de RAM) para buscar,
 ## Funcionalidades
 
 - Busca YouTube com `[ BUSCAR ]` ou Enter
-- Feed inicial: Continuar ouvindo, Recomendados, Similares, Novos artistas, Feito pra você
+- Feed inicial: Continuar ouvindo, Recomendados, **seções por gênero**, Similares, Descobertas, Feito pra você
 - Histórico e cache de feed entre sessões (`%APPDATA%\promptub\`)
-- Fila, playlist `[ REC.PL ]`, pré-aquecimento de stream
+- Fila inteligente com recarga automática (gênero, artistas parecidos, histórico)
+- Playlists: `[ REC.PL ]` (seu gosto) · `[ ART.PL ]` (só o artista buscado) · `[ MIX ]` (misturadão dos seus gêneros)
+- **Like / Dislike** (♥ / ✕) na barra do player — molda fila e recomendações
 - Letras sincronizadas (LYRICS.SYS)
 - Tema **noite** (vermelho) e **dia** (mono claro) — botão `dia`/`noite` na barra do player
 - Login opcional `[ AUTH ]` para sessão YouTube Premium
@@ -81,7 +84,9 @@ promptub/
 ├── src/                    # Frontend (HTML, CSS, JS)
 ├── src-tauri/src/          # Backend Rust
 │   ├── feed_sections.rs    # Feed progressivo
-│   ├── music_recommend.rs  # Recomendações
+│   ├── music_recommend.rs  # Recomendações, ART.PL, MIX
+│   ├── discover.rs         # Gênero, diversidade da fila
+│   ├── taste.rs            # Like/dislike
 │   ├── lyrics.rs           # Letras LRCLIB/YouTube
 │   ├── history.rs          # Histórico persistente
 │   └── stream.rs           # Cache de URLs
@@ -109,7 +114,7 @@ promptub/
 
 ## Versão
 
-Versão atual: **0.4.2** — ver [CHANGELOG.md](CHANGELOG.md) e [VERSION.md](VERSION.md).
+Versão atual: **0.5.1** — ver [CHANGELOG.md](CHANGELOG.md) e [VERSION.md](VERSION.md).
 
 ---
 
