@@ -99,6 +99,7 @@ Write-Host "Iniciando promptub..." -ForegroundColor Green
 try {
     Start-Process -FilePath $Exe -WorkingDirectory (Split-Path $Exe -Parent) -ErrorAction Stop
     Write-Host "OK." -ForegroundColor Green
+    & (Join-Path $PSScriptRoot "install-shortcut.ps1")
 } catch {
     Write-Host ""
     Write-Host "Nao foi possivel abrir o promptub.exe." -ForegroundColor Red

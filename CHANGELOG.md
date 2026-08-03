@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.4.3] — 2026-08-03
+
+### Atalho desktop
+- **Antes:** atalho usava icone embutido verde do exe antigo (`IconLocation` vazio)
+- **Agora:** `promptub.ico` vermelho instalado junto; instalador e `install-shortcut.cmd` forcam icone vermelho no atalho
+
+---
+
 ## [0.4.2] — 2026-08-03
 
 ### UI / tema

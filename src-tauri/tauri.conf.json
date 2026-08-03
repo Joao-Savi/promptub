@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "promptub",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "identifier": "com.promptub",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -36,7 +36,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/tools/": "tools/"
+      "resources/tools/": "tools/",
+      "icons/icon.ico": "promptub.ico"
     },
     "windows": {
       "nsis": {

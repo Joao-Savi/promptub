@@ -1,6 +1,6 @@
 [package]
 name = "promptub"
-version = "0.4.2"
+version = "0.4.3"
 description = "Player de musica leve — estilo terminal"
 authors = ["promptub"]
 edition = "2021"

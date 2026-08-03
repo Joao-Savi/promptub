@@ -16,11 +16,11 @@ SemVer: `MAJOR.MINOR.PATCH`
 - `INSTALAR.cmd` → `WANT`
 - `CHANGELOG.md`
 
-## Versão atual: **0.4.2**
+## Versão atual: **0.4.3**
 
 | Versão | Tipo | Resumo |
 |--------|------|--------|
-| **0.4.2** | PATCH | Tema dia mono; ícone vermelho; botão tema na barra |
+| **0.4.3** | PATCH | Atalho desktop com icone vermelho explicito |
 | **0.4.1** | PATCH | Tema vermelho; instalador limpo; segurança |
 | **0.4.0** | MINOR | HTML5, feed progressivo, sem mpv |
 | **0.3.x** | — | Era mpv + verde + vídeo (ver CHANGELOG) |

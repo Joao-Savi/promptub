@@ -5,6 +5,10 @@ $env:CARGO_TARGET_DIR = Join-Path $Root "src-tauri\target"
 
 . (Join-Path $PSScriptRoot "setup-vs.ps1")
 
+Write-Host "Gerando icone vermelho..." -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot "generate-icon.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Host "Preparando ferramentas (yt-dlp)..." -ForegroundColor Cyan
 & (Join-Path $PSScriptRoot "prepare-installer.ps1")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -37,6 +41,7 @@ try {
     $bin = Join-Path $Root "bin"
     New-Item -ItemType Directory -Force -Path $bin | Out-Null
     Copy-Item $exe (Join-Path $bin "promptub.exe") -Force
+    Copy-Item (Join-Path $Root "src-tauri\icons\icon.ico") (Join-Path $bin "promptub.ico") -Force
     Set-Content -Path (Join-Path $bin "promptub.build.stamp") -Value "tauri-build" -Encoding ascii
 
     $releaseTools = Join-Path $Root "src-tauri\target\release\tools"

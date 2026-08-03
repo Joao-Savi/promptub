@@ -1,34 +1,71 @@
 #Requires -Version 5.1
 $ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent $PSScriptRoot
-$ExePath = Join-Path $Root "bin\promptub.exe"
-$StampPath = Join-Path $Root "bin\promptub.build.stamp"
 
-$needsBuild = -not (Test-Path $ExePath) -or -not (Test-Path $StampPath)
-if ($needsBuild) {
-    Write-Host "Gerando build de producao (frontend embutido)..." -ForegroundColor Yellow
-    & (Join-Path $PSScriptRoot "build-tauri.ps1")
+function Set-PromptubShortcutIcon {
+    param(
+        [Parameter(Mandatory = $true)][string]$ShortcutPath,
+        [Parameter(Mandatory = $true)][string]$TargetPath,
+        [Parameter(Mandatory = $true)][string]$IconPath,
+        [string]$WorkingDirectory = ""
+    )
+    if (-not (Test-Path $IconPath)) {
+        throw "Icone nao encontrado: $IconPath"
+    }
+    $iconFull = (Resolve-Path -LiteralPath $IconPath).Path
+    $targetFull = (Resolve-Path -LiteralPath $TargetPath).Path
+    $wd = if ($WorkingDirectory -and (Test-Path $WorkingDirectory)) {
+        (Resolve-Path -LiteralPath $WorkingDirectory).Path
+    } else {
+        Split-Path $targetFull -Parent
+    }
+
+    if (Test-Path $ShortcutPath) {
+        Remove-Item -LiteralPath $ShortcutPath -Force
+    }
+
+    $WshShell = New-Object -ComObject WScript.Shell
+    $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+    $Shortcut.TargetPath = $targetFull
+    $Shortcut.WorkingDirectory = $wd
+    $Shortcut.Description = "YouTube e YouTube Music - promptub"
+    $Shortcut.IconLocation = "$iconFull,0"
+    $Shortcut.Save()
+}
+
+$Root = Split-Path -Parent $PSScriptRoot
+$IconSrc = Join-Path $Root "src-tauri\icons\icon.ico"
+$BinExe = Join-Path $Root "bin\promptub.exe"
+$InstallExe = Join-Path $env:LOCALAPPDATA "Programs\promptub\promptub.exe"
+$InstallIcon = Join-Path $env:LOCALAPPDATA "Programs\promptub\promptub.ico"
+
+if (-not (Test-Path $IconSrc)) {
+    Write-Host "Gerando icone vermelho..." -ForegroundColor Yellow
+    & (Join-Path $PSScriptRoot "generate-icon.ps1")
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-if (-not (Test-Path $ExePath)) {
-    Write-Error "promptub.exe nao encontrado. Rode scripts\build-tauri.cmd"
+$TargetExe = if (Test-Path $InstallExe) { $InstallExe } elseif (Test-Path $BinExe) { $BinExe } else {
+    Write-Host "Gerando build..." -ForegroundColor Yellow
+    & (Join-Path $PSScriptRoot "build-tauri.ps1")
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if (Test-Path $InstallExe) { $InstallExe } elseif (Test-Path $BinExe) { $BinExe } else {
+        throw "promptub.exe nao encontrado apos build"
+    }
 }
 
-$Launcher = Join-Path $PSScriptRoot "open-promptub.cmd"
+$IconForShortcut = $IconSrc
+if ($TargetExe -eq $InstallExe) {
+    $installDir = Split-Path $InstallExe -Parent
+    New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+    Copy-Item $IconSrc (Join-Path $installDir "promptub.ico") -Force
+    $IconForShortcut = Join-Path $installDir "promptub.ico"
+}
+
 $Desktop = [Environment]::GetFolderPath("Desktop")
 $ShortcutPath = Join-Path $Desktop "promptub.lnk"
 
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-$Shortcut.TargetPath = $Launcher
-$Shortcut.WorkingDirectory = (Split-Path $Launcher -Parent)
-$Shortcut.Description = "YouTube e YouTube Music - promptub"
-$IconPath = Join-Path $Root "src-tauri\icons\icon.ico"
-if (Test-Path $IconPath) {
-    $Shortcut.IconLocation = "$IconPath,0"
-}
-$Shortcut.Save()
+Set-PromptubShortcutIcon -ShortcutPath $ShortcutPath -TargetPath $TargetExe -IconPath $IconForShortcut
 
-Write-Host "Atalho criado: $ShortcutPath" -ForegroundColor Green
-Write-Host "Use o atalho (nao npm run tauri:dev) para abrir sem terminal."
+Write-Host "Atalho atualizado: $ShortcutPath" -ForegroundColor Green
+Write-Host "Alvo: $TargetExe" -ForegroundColor DarkGray
+Write-Host "Icone: $IconForShortcut" -ForegroundColor DarkGray
