@@ -18,11 +18,12 @@ SemVer: `MAJOR.MINOR.PATCH`
 - `README.md`
 - `index.html` (banner welcome)
 
-## Versão atual: **0.5.1**
+## Versão atual: **0.5.2**
 
 | Versão | Tipo | Resumo |
 |--------|------|--------|
-| **0.5.1** | PATCH | ART.PL, MIX, generos separados no feed; fila permite 2 faixas/artista |
+| **0.5.2** | PATCH | Recomendados por genero; botoes com nomes simples; Descobertas |
+| **0.5.1** | PATCH | Playlists por artista e misturado; generos no feed |
 | **0.5.0** | MINOR | Like/dislike; algoritmo de fila personalizado por genero e gosto |
 | **0.4.3** | PATCH | Atalho desktop com icone vermelho explicito |
 | **0.4.1** | PATCH | Tema vermelho; instalador limpo; segurança |

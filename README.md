@@ -38,10 +38,10 @@ O **promptub** abre uma janela nativa pequena (~80–150 MB de RAM) para buscar,
 ## Funcionalidades
 
 - Busca YouTube com `[ BUSCAR ]` ou Enter
-- Feed inicial: Continuar ouvindo, Recomendados, **seções por gênero**, Similares, Descobertas, Feito pra você
+- Feed inicial: Continuar ouvindo, Recomendados (pelo seu gênero), seções por gênero, Similares, **Descobertas** (novidades), Feito pra você
 - Histórico e cache de feed entre sessões (`%APPDATA%\promptub\`)
 - Fila inteligente com recarga automática (gênero, artistas parecidos, histórico)
-- Playlists: `[ REC.PL ]` (seu gosto) · `[ ART.PL ]` (só o artista buscado) · `[ MIX ]` (misturadão dos seus gêneros)
+- Playlists: **Pra você** · **Do artista** · **Misturado** · **Novidades**
 - **Like / Dislike** (♥ / ✕) na barra do player — molda fila e recomendações
 - Letras sincronizadas (LYRICS.SYS)
 - Tema **noite** (vermelho) e **dia** (mono claro) — botão `dia`/`noite` na barra do player
@@ -114,7 +114,7 @@ promptub/
 
 ## Versão
 
-Versão atual: **0.5.1** — ver [CHANGELOG.md](CHANGELOG.md) e [VERSION.md](VERSION.md).
+Versão atual: **0.5.2** — ver [CHANGELOG.md](CHANGELOG.md) e [VERSION.md](VERSION.md).
 
 ---
 

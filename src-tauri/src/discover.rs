@@ -343,12 +343,22 @@ pub fn compute_genre_trends(
 
     for (video, weight) in entries.iter().take(32) {
         let blob = normalize_text(&format!("{} {}", video.title, video.uploader));
+        let mut matched = false;
         for (i, profile) in GENRE_PROFILES.iter().enumerate() {
             if profile
                 .triggers
                 .iter()
                 .any(|t| blob.contains(&normalize_text(t)))
             {
+                *profile_scores.entry(i).or_insert(0) += weight;
+                total += weight;
+                matched = true;
+            }
+        }
+        if !matched && infer_sertanejo(video) {
+            if let Some(i) = GENRE_PROFILES.iter().position(|p| {
+                p.triggers.iter().any(|t| normalize_text(t).contains("sertanejo"))
+            }) {
                 *profile_scores.entry(i).or_insert(0) += weight;
                 total += weight;
             }
@@ -389,6 +399,34 @@ fn capitalize_word(s: &str) -> String {
         None => String::new(),
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
     }
+}
+
+/// Faixa combina com o genero dominante do ouvinte?
+pub fn video_matches_genre_trend(v: &Video, trend: &GenreTrend) -> bool {
+    let blob = normalize_text(&format!("{} {}", v.title, v.uploader));
+    let style = normalize_text(&trend.style);
+    let label = normalize_text(&trend.label);
+    style.split_whitespace().any(|w| w.len() > 3 && blob.contains(w))
+        || blob.contains(&label)
+        || matched_profiles(&blob)
+            .iter()
+            .any(|p| p.styles.iter().any(|s| normalize_text(s).contains(&style)))
+}
+
+pub fn query_off_genre(query: &str, trend: &GenreTrend) -> bool {
+    let q = normalize_text(query);
+    if q.is_empty() {
+        return true;
+    }
+    let style = normalize_text(&trend.style);
+    let label = normalize_text(&trend.label);
+    if style.split_whitespace().any(|w| w.len() > 3 && q.contains(w)) {
+        return false;
+    }
+    if q.contains(&label) {
+        return false;
+    }
+    q.split_whitespace().count() <= 2 && q.len() < 24
 }
 
 pub fn artist_matches_query(v: &Video, query: &str) -> bool {
@@ -629,7 +667,13 @@ const NON_MUSIC_BLOCK: &[&str] = &[
     "gameplay",
     "walkthrough",
     "vlog",
-    "unboxing",
+    "new music friday",
+    "new songs of the week",
+    "songs of the week",
+    "inmusic official",
+    "music friday",
+    "trending music",
+    "top hits 202",
 ];
 
 const GENERIC_UPLOADERS: &[&str] = &[

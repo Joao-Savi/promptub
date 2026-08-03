@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.2] — 2026-08-03
+
+### Recomendados e nomes simples
+- **Antes:** recomendados seguiam busca solta (ex. "panda"); botoes REC.PL, ART.PL, DESC.PL
+- **Agora:** recomendados pelo genero do historico; botoes `[ Pra você ]`, `[ Do artista ]`, `[ Misturado ]`, `[ Novidades ]`; secao Descobertas com lancamentos do genero
+
+---
+
 ## [0.5.1] — 2026-08-03
 
 ### Fila, playlists e generos

@@ -17,21 +17,36 @@ const NEW_ARTISTS_LIMIT: usize = 10;
 const MADE_FOR_YOU_LIMIT: usize = 10;
 
 pub fn seed_label(history: &WatchHistory, last_search: &str, seed: &Option<Video>) -> String {
-    if !last_search.trim().is_empty() {
+    let genre = history.genre_trends(1).first().map(|t| t.label.clone());
+
+    if let Some(g) = genre {
         if history.recent_music.is_empty() {
-            format!("explorar · {}", last_search.trim())
-        } else {
-            format!("seu gosto · {}", last_search.trim())
+            return format!("explorar · {g}");
         }
-    } else if let Some(v) = seed.as_ref() {
-        format!("continuar · {}", extract_artist_label(v))
-    } else if !history.recent_music.is_empty() {
-        "baseado no seu historico".into()
-    } else if history.prefers_brazilian() {
-        "explorar · musicas brasileiras".into()
-    } else {
-        "explorar · musicas".into()
+        return format!("seu gosto · {g}");
     }
+
+    let effective = history.effective_search_context(last_search);
+    if !effective.trim().is_empty() {
+        if history.recent_music.is_empty() {
+            return format!("explorar · {}", effective.trim());
+        }
+        if let Some(v) = seed.as_ref() {
+            return format!("seu gosto · {}", extract_artist_label(v));
+        }
+        return format!("seu gosto · {}", effective.trim());
+    }
+
+    if let Some(v) = seed.as_ref() {
+        return format!("continuar · {}", extract_artist_label(v));
+    }
+    if !history.recent_music.is_empty() {
+        return "baseado no seu historico".into();
+    }
+    if history.prefers_brazilian() {
+        return "explorar · musicas brasileiras".into();
+    }
+    "explorar · musicas".into()
 }
 
 fn parallel_fetch_searches(cookies: &str, queries: &[String], per_query: usize) -> Vec<Vec<Video>> {
@@ -69,7 +84,8 @@ fn parallel_fetch_searches_recent(cookies: &str, queries: &[String], per_query: 
 }
 
 fn taste_ctx(history: &WatchHistory, last_search: &str, seed: &Video) -> (crate::discover::MusicContext, TasteProfile, HashSet<String>) {
-    let rich = history.listening_context(last_search, seed);
+    let effective = history.effective_search_context(last_search);
+    let rich = history.listening_context(&effective, seed);
     let ctx = build_music_context_rich(&rich, seed);
     let fps = history.played_fingerprints();
     (ctx, history.taste.clone(), fps)
@@ -86,29 +102,32 @@ pub fn build_recommended_row(
     seen: &mut HashSet<String>,
 ) -> Result<Vec<Video>, String> {
     let exclude_fps = history.played_fingerprints();
+    let effective = history.effective_search_context(last_search);
+    let seed = seed
+        .as_ref()
+        .cloned()
+        .or_else(|| history.representative_seed());
 
     if let Some(s) = seed {
-        let (ctx, taste, exclude_fps) = taste_ctx(history, last_search, s);
-        let queries: Vec<String> = contextual_search_queries(last_search, s, rotation)
+        let (ctx, taste, exclude_fps) = taste_ctx(history, &effective, &s);
+        let queries: Vec<String> = contextual_search_queries(&effective, &s, rotation)
             .into_iter()
-            .take(query_cap)
+            .take(query_cap.max(4))
             .collect();
         let mut sources = parallel_fetch_searches(cookies, &queries, 6);
         sources = sources
             .into_iter()
             .map(|items| filter_relevant(&ctx, items))
             .collect();
-        if query_cap > 3 {
-            for peer in peer_artists(s, rotation + 1, 2) {
-                if let Ok(items) = youtube::fetch_search(cookies, &format!("{peer} musica"), 6) {
-                    sources.push(filter_relevant(&ctx, items));
-                }
+        for peer in peer_artists(&s, rotation + 1, 4) {
+            if let Ok(items) = youtube::fetch_search(cookies, &format!("{peer} musica"), 6) {
+                sources.push(filter_relevant(&ctx, items));
             }
         }
 
         let interleaved = interleave_sources(sources);
         let filtered = filter_relevant(&ctx, interleaved);
-        let seed_artist = artist_key(s);
+        let seed_artist = artist_key(&s);
         let mut picked = pick_diverse_candidates(
             filtered,
             seen,
@@ -120,7 +139,17 @@ pub fn build_recommended_row(
             Some(&taste),
         );
         if picked.is_empty() {
-            picked = cold_start_fallback(cookies, prefer_br, rotation, seen, &exclude_fps, &taste, query_cap.min(3))?;
+            picked = history_fallback(
+                cookies,
+                history,
+                &effective,
+                prefer_br,
+                rotation,
+                seen,
+                &exclude_fps,
+                &taste,
+                query_cap.max(4),
+            )?;
         }
         for v in &picked {
             seen.insert(v.id.clone());
@@ -128,8 +157,8 @@ pub fn build_recommended_row(
         return Ok(picked);
     }
 
-    if !last_search.trim().is_empty() {
-        let ls = last_search.trim();
+    if !effective.trim().is_empty() {
+        let ls = effective.trim();
         let raw = youtube::fetch_search(cookies, ls, 10)?;
         let refined = refine_search_results(ls, raw);
         if let Some(s) = refined.first() {
@@ -155,7 +184,17 @@ pub fn build_recommended_row(
                 Some(&taste),
             );
             if picked.is_empty() {
-                picked = cold_start_fallback(cookies, prefer_br, rotation, seen, &exclude_fps, &taste, query_cap.min(3))?;
+                picked = history_fallback(
+                    cookies,
+                    history,
+                    ls,
+                    prefer_br,
+                    rotation,
+                    seen,
+                    &exclude_fps,
+                    &taste,
+                    query_cap.max(4),
+                )?;
             }
             for v in &picked {
                 seen.insert(v.id.clone());
@@ -164,7 +203,17 @@ pub fn build_recommended_row(
         }
     }
 
-    cold_start_fallback(cookies, prefer_br, rotation, seen, &exclude_fps, &history.taste, query_cap)
+    history_fallback(
+        cookies,
+        history,
+        &effective,
+        prefer_br,
+        rotation,
+        seen,
+        &exclude_fps,
+        &history.taste,
+        query_cap.max(4),
+    )
 }
 
 /// Artistas do mesmo genero — 1 faixa por artista parecido.
@@ -215,6 +264,76 @@ pub fn build_peers_row(
     Ok(out)
 }
 
+fn history_fallback(
+    cookies: &str,
+    history: &WatchHistory,
+    effective: &str,
+    prefer_br: bool,
+    rotation: usize,
+    seen: &mut HashSet<String>,
+    exclude_fps: &HashSet<String>,
+    taste: &TasteProfile,
+    query_cap: usize,
+) -> Result<Vec<Video>, String> {
+    if !history.recent_music.is_empty() {
+        if let Some(s) = history.representative_seed() {
+            let (ctx, taste_inner, exclude_fps_inner) = taste_ctx(history, effective, &s);
+            let queries: Vec<String> = contextual_search_queries(effective, &s, rotation)
+                .into_iter()
+                .take(query_cap)
+                .collect();
+            let sources: Vec<Vec<Video>> = parallel_fetch_searches(cookies, &queries, 8)
+                .into_iter()
+                .map(|items| filter_relevant(&ctx, items))
+                .collect();
+            let interleaved = interleave_sources(sources);
+            let filtered = filter_relevant(&ctx, interleaved);
+            let picked = pick_diverse_candidates(
+                filtered,
+                seen,
+                &exclude_fps_inner,
+                &HashMap::new(),
+                &artist_key(&s),
+                RECOMMENDED_LIMIT,
+                Some(&ctx),
+                Some(&taste_inner),
+            );
+            if !picked.is_empty() {
+                return Ok(picked);
+            }
+        }
+        for trend in history.genre_trends(2) {
+            let fake = Video {
+                id: String::new(),
+                title: trend.style.clone(),
+                uploader: trend.label.clone(),
+                duration: "3:00".into(),
+                url: String::new(),
+                thumbnail: String::new(),
+                is_live: false,
+            };
+            let ctx = build_music_context_rich(effective, &fake);
+            if let Ok(items) = youtube::fetch_search(cookies, &format!("{} musica", trend.style), 8) {
+                let filtered = filter_relevant(&ctx, items);
+                let picked = pick_diverse_candidates(
+                    filtered,
+                    seen,
+                    exclude_fps,
+                    &HashMap::new(),
+                    "",
+                    RECOMMENDED_LIMIT,
+                    Some(&ctx),
+                    Some(taste),
+                );
+                if !picked.is_empty() {
+                    return Ok(picked);
+                }
+            }
+        }
+    }
+    cold_start_fallback(cookies, prefer_br, rotation, &*seen, exclude_fps, taste, query_cap.min(3))
+}
+
 fn cold_start_fallback(
     cookies: &str,
     prefer_br: bool,
@@ -234,6 +353,14 @@ fn cold_start_fallback(
             .into_iter()
             .map(filter_playable),
     );
+    if sources.is_empty() && prefer_br {
+        let fallback = cold_start_queries(true, rotation + 1);
+        sources.extend(
+            parallel_fetch_searches(cookies, &fallback, 8)
+                .into_iter()
+                .map(filter_playable),
+        );
+    }
     if sources.is_empty() {
         let fallback = cold_start_queries(false, rotation + 1);
         sources.extend(
@@ -256,56 +383,164 @@ fn cold_start_fallback(
     Ok(picked)
 }
 
+/// Descobertas — musicas novas no genero que o ouvinte escuta.
+pub fn build_discoveries_row(
+    cookies: &str,
+    seed: &Option<Video>,
+    history: &WatchHistory,
+    last_search: &str,
+    rotation: usize,
+    query_take: usize,
+    seen: &mut HashSet<String>,
+) -> Result<Vec<Video>, String> {
+    let effective = history.effective_search_context(last_search);
+    let known = history.known_uploaders();
+    let exclude_fps = history.played_fingerprints();
+    let taste = &history.taste;
+
+    let anchor = seed
+        .as_ref()
+        .cloned()
+        .or_else(|| history.representative_seed());
+
+    let mut queries: Vec<String> = Vec::new();
+    for trend in history.genre_trends(2) {
+        queries.push(format!("{} 2024", trend.style));
+        queries.push(format!("{} lancamento", trend.style));
+        queries.push(format!("{} novidade", trend.style));
+    }
+    if let Some(s) = &anchor {
+        queries.extend(
+            contextual_search_queries(&effective, s, rotation + 5)
+                .into_iter()
+                .take(2),
+        );
+    }
+    if queries.is_empty() {
+        queries.extend(
+            cold_start_queries(history.prefers_brazilian(), rotation + 2)
+                .into_iter()
+                .take(query_take),
+        );
+    }
+    queries.sort();
+    queries.dedup();
+    queries.truncate(query_take.max(4));
+
+    let ctx = if let Some(s) = &anchor {
+        taste_ctx(history, &effective, s).0
+    } else if let Some(t) = history.genre_trends(1).first() {
+        let fake = Video {
+            id: String::new(),
+            title: t.style.clone(),
+            uploader: t.label.clone(),
+            duration: "3:00".into(),
+            url: String::new(),
+            thumbnail: String::new(),
+            is_live: false,
+        };
+        build_music_context_rich(&effective, &fake)
+    } else {
+        build_music_context_rich(&effective, &Video {
+            id: String::new(),
+            title: effective.clone(),
+            uploader: String::new(),
+            duration: "3:00".into(),
+            url: String::new(),
+            thumbnail: String::new(),
+            is_live: false,
+        })
+    };
+
+    let sources: Vec<Vec<Video>> = parallel_fetch_searches_recent(cookies, &queries, 7)
+        .into_iter()
+        .map(|items| filter_relevant(&ctx, items))
+        .collect();
+
+    let interleaved = interleave_sources(sources);
+    let filtered = filter_relevant(&ctx, interleaved);
+    let picked = pick_new_artists(filtered, seen, &exclude_fps, &known, Some(taste), NEW_ARTISTS_LIMIT);
+    for v in &picked {
+        seen.insert(v.id.clone());
+    }
+    Ok(picked)
+}
+
+/// Playlist descobertas — lancamentos do genero do ouvinte.
+pub fn build_discoveries_playlist(
+    cookies: &str,
+    history: &WatchHistory,
+    last_search: &str,
+) -> Result<(Vec<Video>, String), String> {
+    let mut seen = history.played_ids();
+    for id in history.blocked_ids() {
+        seen.insert(id);
+    }
+    let effective = history.effective_search_context(last_search);
+    let genre = history
+        .genre_trends(1)
+        .first()
+        .map(|t| t.label.clone())
+        .unwrap_or_else(|| "novidades".into());
+
+    let mut queries: Vec<String> = Vec::new();
+    for trend in history.genre_trends(3) {
+        queries.push(format!("{} 2025", trend.style));
+        queries.push(format!("{} lancamento 2024", trend.style));
+        queries.push(format!("{} estreia", trend.style));
+    }
+    if queries.is_empty() {
+        return Err("Toque mais musicas para montar descobertas.".into());
+    }
+
+    let fake = history.representative_seed().unwrap_or(Video {
+        id: String::new(),
+        title: effective.clone(),
+        uploader: genre.clone(),
+        duration: "3:00".into(),
+        url: String::new(),
+        thumbnail: String::new(),
+        is_live: false,
+    });
+    let ctx = build_music_context_rich(&effective, &fake);
+
+    let sources: Vec<Vec<Video>> = parallel_fetch_searches_recent(cookies, &queries, 8)
+        .into_iter()
+        .map(|items| filter_relevant(&ctx, items))
+        .collect();
+
+    let interleaved = interleave_sources(sources);
+    let filtered = filter_relevant(&ctx, interleaved);
+    let playlist = pick_with_limits(
+        filtered,
+        &seen,
+        &history.played_fingerprints(),
+        &HashMap::new(),
+        "",
+        25,
+        Some(&ctx),
+        Some(&history.taste),
+        &PickLimits::mixed(),
+    );
+
+    if playlist.is_empty() {
+        return Err("Nenhuma novidade encontrada no seu genero.".into());
+    }
+
+    Ok((playlist, format!("descobertas · {genre}")))
+}
+
 pub fn build_new_artists_row(
     cookies: &str,
     seed: &Option<Video>,
     history: &WatchHistory,
     last_search: &str,
-    prefer_br: bool,
+    _prefer_br: bool,
     rotation: usize,
     query_take: usize,
     seen: &mut HashSet<String>,
 ) -> Result<Vec<Video>, String> {
-    let known = history.known_uploaders();
-    let exclude_fps = history.played_fingerprints();
-    let taste = &history.taste;
-
-    if let Some(s) = seed {
-        let (ctx, taste, exclude_fps) = taste_ctx(history, last_search, s);
-        let queries: Vec<String> = contextual_search_queries(last_search, s, rotation + 3)
-            .into_iter()
-            .take(query_take)
-            .collect();
-        let sources: Vec<Vec<Video>> = parallel_fetch_searches_recent(cookies, &queries, 6)
-            .into_iter()
-            .map(|items| filter_relevant(&ctx, items))
-            .collect();
-        let interleaved = interleave_sources(sources);
-        let filtered = filter_relevant(&ctx, interleaved);
-        let picked = pick_new_artists(filtered, seen, &exclude_fps, &known, Some(&taste), NEW_ARTISTS_LIMIT);
-        for v in &picked {
-            seen.insert(v.id.clone());
-        }
-        return Ok(picked);
-    }
-
-    let mut sources: Vec<Vec<Video>> = Vec::new();
-    let queries: Vec<String> = cold_start_queries(prefer_br, rotation + 2)
-        .into_iter()
-        .take(query_take)
-        .collect();
-    sources.extend(
-        parallel_fetch_searches_recent(cookies, &queries, 8)
-            .into_iter()
-            .map(filter_playable),
-    );
-
-    let interleaved = interleave_sources(sources);
-    let picked = pick_new_artists(interleaved, seen, &exclude_fps, &known, Some(taste), NEW_ARTISTS_LIMIT);
-    for v in &picked {
-        seen.insert(v.id.clone());
-    }
-    Ok(picked)
+    build_discoveries_row(cookies, seed, history, last_search, rotation, query_take, seen)
 }
 
 /// Feito pra voce — com historico usa o gosto; sem historico monta descobertas.

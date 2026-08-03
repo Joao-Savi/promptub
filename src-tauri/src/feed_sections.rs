@@ -125,15 +125,20 @@ pub fn build_section(
 
 fn feed_context(state: &SharedState) -> (WatchHistory, Option<Video>, String, usize) {
     let history = state.watch_history.lock().clone();
-    let seed = state
-        .last_video
-        .lock()
-        .clone()
+    let raw_search = state.last_search();
+    let mut last_search = if raw_search.trim().is_empty() {
+        history.feed_context()
+    } else {
+        raw_search
+    };
+    last_search = history.effective_search_context(&last_search);
+
+    let seed = history
+        .representative_seed()
+        .or_else(|| state.last_video.lock().clone())
+        .or_else(|| state.queue.lock().current_video())
         .or_else(|| history.music_seed());
-    let mut last_search = state.last_search();
-    if last_search.trim().is_empty() {
-        last_search = history.feed_context();
-    }
+
     let rotation = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as usize)

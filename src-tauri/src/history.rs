@@ -250,6 +250,61 @@ impl WatchHistory {
         parts.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
     }
 
+    /// Contexto de busca alinhado ao genero que o ouvinte realmente escuta.
+    pub fn effective_search_context(&self, last_search: &str) -> String {
+        let trends = self.genre_trends(1);
+        if let Some(trend) = trends.first() {
+            if trend.weight >= 0.22 {
+                let ls = last_search.trim();
+                if ls.is_empty() || crate::discover::query_off_genre(ls, trend) {
+                    let mut artists: Vec<String> = self
+                        .recent_music
+                        .iter()
+                        .take(10)
+                        .map(|e| extract_artist_label(&e.video))
+                        .filter(|a| a.len() > 2)
+                        .collect();
+                    artists.sort();
+                    artists.dedup();
+                    artists.truncate(3);
+                    if artists.is_empty() {
+                        return trend.style.clone();
+                    }
+                    return format!("{} {}", trend.style, artists.join(" "));
+                }
+            }
+        }
+        if !last_search.trim().is_empty() {
+            return last_search.trim().to_string();
+        }
+        trends
+            .first()
+            .map(|t| t.style.clone())
+            .unwrap_or_else(|| self.interest_keywords(3).join(" "))
+    }
+
+    /// Faixa-semente representativa do gosto (nao outlier como busca aleatoria).
+    pub fn representative_seed(&self) -> Option<Video> {
+        if let Some(trend) = self.genre_trends(1).first() {
+            if trend.weight >= 0.2 {
+                for entry in &self.recent_music {
+                    if crate::discover::video_matches_genre_trend(&entry.video, trend) {
+                        return Some(entry.video.clone());
+                    }
+                }
+                for v in self.top_music(8) {
+                    if crate::discover::video_matches_genre_trend(&v, trend) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+        self.top_music(1)
+            .into_iter()
+            .next()
+            .or_else(|| self.last_music.clone())
+    }
+
     pub fn genre_trends(&self, limit: usize) -> Vec<crate::discover::GenreTrend> {
         let entries: Vec<(Video, u32)> = self
             .recent_music

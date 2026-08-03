@@ -103,14 +103,17 @@
               tabindex="1"
             />
             <button id="btn-search" class="btn-accent" title="Buscar">[ BUSCAR ]</button>
-            <button id="btn-rec-playlist" class="btn-accent" title="Montar playlist com base no seu gosto">
-              [ REC.PL ]
+            <button id="btn-rec-playlist" class="btn-accent" title="Playlist com base no que você escuta">
+              [ Pra você ]
             </button>
-            <button id="btn-artist-playlist" class="btn-accent" title="Playlist só do artista buscado">
-              [ ART.PL ]
+            <button id="btn-artist-playlist" class="btn-accent" title="Só músicas do artista buscado">
+              [ Do artista ]
             </button>
-            <button id="btn-mixed-playlist" class="btn-accent" title="Misturadao dos seus generos">
-              [ MIX ]
+            <button id="btn-mixed-playlist" class="btn-accent" title="Mistura os gêneros que você mais ouve">
+              [ Misturado ]
+            </button>
+            <button id="btn-discoveries-playlist" class="btn-accent" title="Lançamentos e novidades do seu gênero">
+              [ Novidades ]
             </button>
           </header>
 
@@ -176,7 +179,7 @@
                 <div class="section-header">
                   <div>
                     <h2>Descobertas</h2>
-                    <p id="new-artists-subtitle" class="muted">novidades · artistas diferentes</p>
+                    <p id="new-artists-subtitle" class="muted">lancamentos · novidades do seu genero</p>
                   </div>
                   <button id="btn-play-new-row" class="btn-accent">[ PLAY ]</button>
                   <button id="btn-queue-new-row" class="btn-accent">[ +FILA ]</button>
@@ -192,7 +195,7 @@
                   </div>
                   <button id="btn-play-history-row" class="btn-accent">[ PLAY ]</button>
                   <button id="btn-queue-history-row" class="btn-accent">[ +FILA ]</button>
-                  <button id="btn-open-history-pl" class="btn-primary">[ REC.PL ]</button>
+                  <button id="btn-open-history-pl" class="btn-primary">[ Pra você ]</button>
                 </div>
                 <div id="history-mix-music" class="feed-row"></div>
               </section>
@@ -211,7 +214,7 @@
 
             <section id="panel-welcome" class="panel md-doc">
               <pre class="welcome-ascii" aria-hidden="true"><code>╔══════════════════════════════════════╗
-║  PROMPTUB v0.5.1  //  TERMINAL         ║
+║  PROMPTUB v0.5.2  //  TERMINAL         ║
 ║  player: HTML5 · stream: yt-dlp      ║
 ╚══════════════════════════════════════╝</code></pre>
               <h2 id="welcome-title">Bem-vindo</h2>
@@ -220,7 +223,7 @@
               </p>
               <ul class="md-list" id="welcome-list">
                 <li>Digite uma query e pressione <code>Enter</code></li>
-                <li>Monte playlists com <code>[ REC.PL ]</code></li>
+                <li>Monte listas com <code>[ Pra você ]</code>, <code>[ Do artista ]</code>, <code>[ Misturado ]</code> ou <code>[ Novidades ]</code></li>
                 <li>Atalhos visiveis na barra inferior do player</li>
               </ul>
             </section>

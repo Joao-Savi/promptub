@@ -722,7 +722,7 @@ async function applyFeedSection(section, items) {
     if (sub) {
       const labels = {
         peers: `${items.length} artistas do mesmo genero`,
-        new_artists: `${items.length} descobertas`,
+        new_artists: `${items.length} novidades do seu genero`,
         history_mix: `feito pra voce · ${items.length} faixas`,
       };
       sub.textContent = labels[section] || `${items.length} faixas`;
@@ -861,6 +861,7 @@ async function buildPlaylist(mode = "personal", title = "Playlist recomendada") 
     personal: "btn-rec-playlist",
     artist: "btn-artist-playlist",
     mixed: "btn-mixed-playlist",
+    discoveries: "btn-discoveries-playlist",
   };
   const btn = $(btnIds[mode] || "btn-rec-playlist");
   if (btn) btn.disabled = true;
@@ -893,7 +894,7 @@ async function buildPlaylist(mode = "personal", title = "Playlist recomendada") 
 }
 
 async function buildRecommendedPlaylist() {
-  return buildPlaylist("personal", "Playlist recomendada");
+  return buildPlaylist("personal", "Pra você");
 }
 
 async function sendPlaylistToQueue() {
@@ -1155,10 +1156,13 @@ $("btn-refresh-rec-music")?.addEventListener("click", () => {
 });
 $("btn-rec-playlist")?.addEventListener("click", buildRecommendedPlaylist);
 $("btn-artist-playlist")?.addEventListener("click", () =>
-  buildPlaylist("artist", "Playlist do artista")
+  buildPlaylist("artist", "Do artista")
 );
 $("btn-mixed-playlist")?.addEventListener("click", () =>
-  buildPlaylist("mixed", "Misturadao")
+  buildPlaylist("mixed", "Misturado")
+);
+$("btn-discoveries-playlist")?.addEventListener("click", () =>
+  buildPlaylist("discoveries", "Novidades")
 );
 $("btn-playlist-to-queue")?.addEventListener("click", sendPlaylistToQueue);
 

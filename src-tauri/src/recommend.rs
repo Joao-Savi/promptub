@@ -46,6 +46,7 @@ pub async fn recommended_playlist(
                 music_recommend::build_artist_playlist(&cookies, &q, &history)
             }
             "mixed" => music_recommend::build_mixed_playlist(&cookies, &history, &last_search),
+            "discoveries" => music_recommend::build_discoveries_playlist(&cookies, &history, &last_search),
             _ => {
                 let seed_video = if let Some(ref id) = seed_id {
                     youtube::fetch_track(&cookies, id)?.or(None)
