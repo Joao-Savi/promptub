@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.4] — 2026-08-04
+
+### Sincronia das letras e importar playlist
+- **Antes:** destaque da letra atrasava a voz; importar mix/radio (`RD...`) falhava no yt-dlp
+- **Agora:** antecipacao de 0,45 s + sync a 60 fps; URLs de radio/mix e playlists PL corrigidas; `--ignore-errors` na importacao
+
+---
+
 ## [0.5.3] — 2026-08-04
 
 ### Letras, karaoke e importar playlist

@@ -80,18 +80,32 @@ fn push_yt_extractor(args: &mut Vec<String>, cookies: &str) {
 }
 
 pub(crate) fn run_list(args: Vec<String>) -> Result<Vec<Video>, String> {
+    run_list_inner(args, false)
+}
+
+pub(crate) fn run_list_lenient(args: Vec<String>) -> Result<Vec<Video>, String> {
+    run_list_inner(args, true)
+}
+
+fn run_list_inner(args: Vec<String>, lenient: bool) -> Result<Vec<Video>, String> {
     let ytdlp = find_ytdlp().ok_or("yt-dlp nao encontrado")?;
     let output = utf8_cmd(&ytdlp)
         .args(&args)
         .output()
         .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        return Err(decode_bytes(&output.stderr).trim().to_string());
-    }
-    Ok(decode_bytes(&output.stdout)
+    let videos: Vec<Video> = decode_bytes(&output.stdout)
         .lines()
         .filter_map(Video::from_line)
-        .collect())
+        .collect();
+    if !output.status.success() && (!lenient || videos.is_empty()) {
+        let err = decode_bytes(&output.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            "yt-dlp falhou ao listar faixas".into()
+        } else {
+            err
+        });
+    }
+    Ok(videos)
 }
 
 pub(crate) fn fetch_search(cookies: &str, query: &str, limit: usize) -> Result<Vec<Video>, String> {
@@ -181,8 +195,59 @@ pub fn normalize_playlist_url(input: &str) -> Option<String> {
     if list_id.len() < 10 {
         return None;
     }
+
+    if let Some(vid) = extract_watch_video_id(s) {
+        return Some(format!(
+            "https://www.youtube.com/watch?v={vid}&list={list_id}"
+        ));
+    }
+
+    if let Some(watch) = radio_mix_watch_url(&list_id) {
+        return Some(watch);
+    }
+
+    if list_id.starts_with("PL") || list_id.starts_with("OL") || list_id.starts_with("LL") {
+        return Some(format!(
+            "https://music.youtube.com/playlist?list={list_id}"
+        ));
+    }
+
     Some(format!(
         "https://www.youtube.com/playlist?list={list_id}"
+    ))
+}
+
+fn extract_watch_video_id(input: &str) -> Option<String> {
+    let lower = input.to_lowercase();
+    for needle in ["?v=", "&v="] {
+        let Some(idx) = lower.find(needle) else {
+            continue;
+        };
+        let start = idx + needle.len();
+        let id: String = input[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if id.len() == 11 {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn radio_mix_watch_url(list_id: &str) -> Option<String> {
+    let vid = if let Some(rest) = list_id.strip_prefix("RDMM") {
+        rest.get(..11)?
+    } else if list_id.starts_with("RD") && list_id.len() >= 13 {
+        list_id.get(2..13)?
+    } else {
+        return None;
+    };
+    if vid.len() != 11 || !vid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return None;
+    }
+    Some(format!(
+        "https://www.youtube.com/watch?v={vid}&list={list_id}"
     ))
 }
 
@@ -191,13 +256,14 @@ pub fn fetch_playlist(cookies: &str, url: &str, limit: usize) -> Result<Vec<Vide
     push_yt_extractor(&mut args, cookies);
     args.extend([
         "--flat-playlist".into(),
+        "--ignore-errors".into(),
         "--playlist-end".into(),
         limit.to_string(),
         "--print".into(),
         PRINT_FIELDS.into(),
         url.to_string(),
     ]);
-    let items = run_list(args)?;
+    let items = run_list_lenient(args)?;
     Ok(items
         .into_iter()
         .filter(|v| crate::discover::is_playable_track(v))
@@ -365,8 +431,22 @@ mod security_tests {
         )
         .unwrap();
         assert!(url.contains("list=PLrAXtmRdnEQy6nuLMH"));
+        assert!(url.contains("v=abc12345678"));
         assert!(is_youtube_playlist_url(
             "https://music.youtube.com/playlist?list=PLabcdefghijklmnop"
         ));
+    }
+
+    #[test]
+    fn normalizes_radio_mix_playlist() {
+        let url = normalize_playlist_url("https://www.youtube.com/watch?v=Tw6vosUnGdc&list=RDTw6vosUnGdc")
+            .unwrap();
+        assert!(url.contains("list=RDTw6vosUnGdc"));
+        assert!(url.contains("v=Tw6vosUnGdc"));
+
+        let url = normalize_playlist_url("https://www.youtube.com/playlist?list=RDTw6vosUnGdc")
+            .unwrap();
+        assert!(url.contains("watch?v=Tw6vosUnGdc"));
+        assert!(url.contains("list=RDTw6vosUnGdc"));
     }
 }

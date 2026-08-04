@@ -18,10 +18,11 @@ SemVer: `MAJOR.MINOR.PATCH`
 - `README.md`
 - `index.html` (banner welcome)
 
-## Versão atual: **0.5.3**
+## Versão atual: **0.5.4**
 
 | Versão | Tipo | Resumo |
 |--------|------|--------|
+| **0.5.4** | PATCH | Sync de letras mais precisa; importar playlist radio/mix |
 | **0.5.3** | PATCH | Letras corrigidas; modo karaoke; importar playlist YouTube |
 | **0.5.2** | PATCH | Recomendados por genero; botoes com nomes simples; Descobertas |
 | **0.5.1** | PATCH | Playlists por artista e misturado; generos no feed |
