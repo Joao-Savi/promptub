@@ -13,7 +13,7 @@ pub struct LyricLine {
     pub text: String,
 }
 
-pub fn fetch_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -> Result<Vec<LyricLine>, String> {
+pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -> Result<Vec<LyricLine>, String> {
     let id = video_id.trim();
     if id.is_empty() {
         return Err("ID invalido".into());
@@ -21,12 +21,15 @@ pub fn fetch_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) ->
 
     let meta = parse_lyrics_meta(title, artist);
 
-    // LRCLIB primeiro — musicas oficiais raramente tem legenda no YouTube
     if let Ok(lines) = fetch_lrclib(&meta) {
         return Ok(lines);
     }
 
-    fetch_youtube_subs(cookies, id)
+    if let Ok(lines) = fetch_youtube_subs(cookies, id) {
+        return Ok(lines);
+    }
+
+    Err("Letra nao encontrada para esta faixa".into())
 }
 
 #[derive(Clone)]
@@ -93,13 +96,16 @@ fn strip_bracket_tags(s: &str) -> String {
 }
 
 fn fetch_lrclib(meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
+    const NO_ARTIST: &str = "";
     let pairs = [
-        (&meta.track_short, &meta.artist),
-        (&meta.track_full, &meta.artist),
+        (&meta.track_short, meta.artist.as_str()),
+        (&meta.track_full, meta.artist.as_str()),
+        (&meta.track_short, NO_ARTIST),
+        (&meta.track_full, NO_ARTIST),
     ];
 
     for (track, artist) in pairs {
-        if track.is_empty() || artist.is_empty() {
+        if track.is_empty() {
             continue;
         }
         if let Ok(lines) = lrclib_get(track, artist) {
@@ -107,18 +113,16 @@ fn fetch_lrclib(meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
         }
     }
 
-    if let Ok(lines) = lrclib_search(&meta.search_query, &meta.artist) {
-        return Ok(lines);
-    }
-
-    if meta.track_short != meta.track_full {
-        if let Ok(lines) = lrclib_search(&format!("{} {}", meta.artist, meta.track_full), &meta.artist) {
-            return Ok(lines);
+    for query in [
+        &meta.search_query,
+        &format!("{} {}", meta.artist, meta.track_short),
+        &meta.track_short,
+        &meta.track_full,
+    ] {
+        if query.trim().is_empty() {
+            continue;
         }
-    }
-
-    if !meta.track_short.is_empty() {
-        if let Ok(lines) = lrclib_search(&meta.track_short, &meta.artist) {
+        if let Ok(lines) = lrclib_search(query, &meta.artist) {
             return Ok(lines);
         }
     }
@@ -127,13 +131,20 @@ fn fetch_lrclib(meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
 }
 
 fn lrclib_get(track: &str, artist: &str) -> Result<Vec<LyricLine>, String> {
-    let url = format!(
-        "https://lrclib.net/api/get?track_name={}&artist_name={}",
-        url_encode(track),
-        url_encode(artist)
-    );
+    let url = if artist.trim().is_empty() {
+        format!(
+            "https://lrclib.net/api/get?track_name={}",
+            url_encode(track)
+        )
+    } else {
+        format!(
+            "https://lrclib.net/api/get?track_name={}&artist_name={}",
+            url_encode(track),
+            url_encode(artist)
+        )
+    };
     let body = http_get(&url)?;
-    parse_lrclib_response(&decode_bytes(&body), artist)
+    parse_lrclib_response(&body, artist)
 }
 
 fn lrclib_search(query: &str, prefer_artist: &str) -> Result<Vec<LyricLine>, String> {
@@ -142,34 +153,43 @@ fn lrclib_search(query: &str, prefer_artist: &str) -> Result<Vec<LyricLine>, Str
         url_encode(query.trim())
     );
     let body = http_get(&url)?;
-    let raw = decode_bytes(&body);
+    let raw = body;
     let results: Vec<serde_json::Value> =
         serde_json::from_str(&raw).map_err(|e| format!("LRCLIB search invalido: {e}"))?;
 
     let mut fallback: Option<String> = None;
+    let mut plain_fallback: Option<String> = None;
     for item in results {
-        let Some(lrc) = item.get("syncedLyrics").and_then(|x| x.as_str()) else {
-            continue;
-        };
-        if lrc.trim().is_empty() {
-            continue;
+        if let Some(lrc) = item.get("syncedLyrics").and_then(|x| x.as_str()) {
+            if !lrc.trim().is_empty() {
+                let item_artist = item
+                    .get("artistName")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
+                if !prefer_artist.is_empty() && artists_match(item_artist, prefer_artist) {
+                    return parse_lrc(lrc);
+                }
+                if fallback.is_none() {
+                    fallback = Some(lrc.to_string());
+                }
+            }
         }
-        let item_artist = item
-            .get("artistName")
-            .and_then(|x| x.as_str())
-            .unwrap_or("");
-        if !prefer_artist.is_empty() && artists_match(item_artist, prefer_artist) {
-            return parse_lrc(lrc);
-        }
-        if fallback.is_none() {
-            fallback = Some(lrc.to_string());
+        if plain_fallback.is_none() {
+            if let Some(plain) = item.get("plainLyrics").and_then(|x| x.as_str()) {
+                if !plain.trim().is_empty() {
+                    plain_fallback = Some(plain.to_string());
+                }
+            }
         }
     }
 
     if let Some(lrc) = fallback {
         return parse_lrc(&lrc);
     }
-    Err("LRCLIB sem syncedLyrics".into())
+    if let Some(plain) = plain_fallback {
+        return Ok(plain_to_lines(&plain));
+    }
+    Err("LRCLIB sem letra".into())
 }
 
 fn parse_lrclib_response(raw: &str, prefer_artist: &str) -> Result<Vec<LyricLine>, String> {
@@ -178,30 +198,63 @@ fn parse_lrclib_response(raw: &str, prefer_artist: &str) -> Result<Vec<LyricLine
         return lrclib_search_result(arr, prefer_artist);
     }
     if let Some(lrc) = v.get("syncedLyrics").and_then(|x| x.as_str()) {
-        return parse_lrc(lrc);
+        if !lrc.trim().is_empty() {
+            return parse_lrc(lrc);
+        }
+    }
+    if let Some(plain) = v.get("plainLyrics").and_then(|x| x.as_str()) {
+        if !plain.trim().is_empty() {
+            return Ok(plain_to_lines(plain));
+        }
     }
     Err("LRCLIB resposta sem letra".into())
 }
 
+fn plain_to_lines(text: &str) -> Vec<LyricLine> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .enumerate()
+        .map(|(i, line)| LyricLine {
+            start: i as f64 * 3.0,
+            end: (i + 1) as f64 * 3.0,
+            text: line.to_string(),
+        })
+        .collect()
+}
+
 fn lrclib_search_result(items: &[serde_json::Value], prefer_artist: &str) -> Result<Vec<LyricLine>, String> {
     let mut fallback: Option<&str> = None;
+    let mut plain_fallback: Option<&str> = None;
     for item in items {
-        let Some(lrc) = item.get("syncedLyrics").and_then(|x| x.as_str()) else {
-            continue;
-        };
-        let item_artist = item
-            .get("artistName")
-            .and_then(|x| x.as_str())
-            .unwrap_or("");
-        if !prefer_artist.is_empty() && artists_match(item_artist, prefer_artist) {
-            return parse_lrc(lrc);
+        if let Some(lrc) = item.get("syncedLyrics").and_then(|x| x.as_str()) {
+            if lrc.trim().is_empty() {
+                continue;
+            }
+            let item_artist = item
+                .get("artistName")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            if !prefer_artist.is_empty() && artists_match(item_artist, prefer_artist) {
+                return parse_lrc(lrc);
+            }
+            if fallback.is_none() {
+                fallback = Some(lrc);
+            }
         }
-        if fallback.is_none() {
-            fallback = Some(lrc);
+        if plain_fallback.is_none() {
+            if let Some(plain) = item.get("plainLyrics").and_then(|x| x.as_str()) {
+                if !plain.trim().is_empty() {
+                    plain_fallback = Some(plain);
+                }
+            }
         }
     }
     if let Some(lrc) = fallback {
         return parse_lrc(lrc);
+    }
+    if let Some(plain) = plain_fallback {
+        return Ok(plain_to_lines(plain));
     }
     Err("LRCLIB array vazio".into())
 }
@@ -245,6 +298,8 @@ fn download_subs_to_dir(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>,
             "pt,pt-BR,en".into(),
             "--sub-format".into(),
             fmt.into(),
+            "--extractor-args".into(),
+            "youtube:player_client=android,web".into(),
             "--output".into(),
             out_tpl.clone(),
             url.clone(),
@@ -270,8 +325,7 @@ fn download_subs_from_info(cookies: &str, video_id: &str) -> Result<Vec<LyricLin
     let info = ytdlp_dump_json(cookies, video_id)?;
     let sub_url = pick_sub_url(&info).ok_or("Sem URL de legenda")?;
     let body = http_get(&sub_url)?;
-    let raw = decode_bytes(&body);
-    parse_subtitle_text(&raw, sub_url.contains("json3") || raw.trim_start().starts_with('{'))
+    parse_subtitle_text(&body, sub_url.contains("json3") || body.trim_start().starts_with('{'))
 }
 
 fn ytdlp_dump_json(cookies: &str, video_id: &str) -> Result<serde_json::Value, String> {
@@ -281,6 +335,8 @@ fn ytdlp_dump_json(cookies: &str, video_id: &str) -> Result<serde_json::Value, S
         "--skip-download".into(),
         "--dump-single-json".into(),
         "--no-warnings".into(),
+        "--extractor-args".into(),
+        "youtube:player_client=android,web".into(),
         url,
     ];
     if !cookies.is_empty() {
@@ -620,22 +676,18 @@ fn url_encode(s: &str) -> String {
     out
 }
 
-fn http_get(url: &str) -> Result<Vec<u8>, String> {
-    for curl in ["curl.exe", "curl"] {
-        if let Ok(output) = utf8_cmd(curl)
-            .args(["-fsSL", "-A", "promptub/1.0", url])
-            .output()
-        {
-            if output.status.success() {
-                return Ok(output.stdout);
-            }
-        }
-    }
-    Err("HTTP indisponivel (curl)".into())
+fn http_get(url: &str) -> Result<String, String> {
+    ureq::get(url)
+        .set("User-Agent", "promptub/1.0 (+https://github.com/Joao-Savi/promptub)")
+        .set("Accept", "application/json, text/plain, */*")
+        .call()
+        .map_err(|e| format!("HTTP: {e}"))?
+        .into_string()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn fetch_lyrics_cmd(
+pub async fn fetch_lyrics(
     state: tauri::State<'_, crate::state::SharedState>,
     video_id: String,
     title: Option<String>,
@@ -645,7 +697,7 @@ pub async fn fetch_lyrics_cmd(
     let title = title.unwrap_or_default();
     let artist = artist.unwrap_or_default();
     let cookies = state.cookies();
-    tauri::async_runtime::spawn_blocking(move || fetch_lyrics(&cookies, &id, &title, &artist))
+    tauri::async_runtime::spawn_blocking(move || lookup_lyrics(&cookies, &id, &title, &artist))
         .await
         .map_err(|e| format!("lyrics: {e}"))?
 }

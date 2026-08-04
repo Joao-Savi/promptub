@@ -2,7 +2,7 @@ use crate::discover::title_fingerprint;
 use crate::player;
 use crate::queue_refill;
 use crate::state::SharedState;
-use crate::youtube::Video;
+use crate::youtube::{self, Video};
 use serde::Serialize;
 use std::collections::HashSet;
 use tauri::State;
@@ -206,6 +206,48 @@ pub fn load_queue(state: State<'_, SharedState>, items: Vec<Video>) -> Result<()
     crate::stream::prewarm_queue_ahead(&state);
     queue_refill::maybe_refill_queue(&state);
     Ok(())
+}
+
+#[derive(Clone, Serialize)]
+pub struct ImportPlaylistResult {
+    pub added: usize,
+    pub skipped: usize,
+    pub total: usize,
+}
+
+#[tauri::command]
+pub async fn import_playlist(
+    state: State<'_, SharedState>,
+    url: String,
+) -> Result<ImportPlaylistResult, String> {
+    let playlist_url = youtube::normalize_playlist_url(&url)
+        .ok_or("Cole um link valido de playlist do YouTube (precisa ter list=...)")?;
+    let cookies = state.cookies();
+
+    let items = tauri::async_runtime::spawn_blocking(move || {
+        youtube::fetch_playlist(&cookies, &playlist_url, youtube::PLAYLIST_MAX)
+    })
+    .await
+    .map_err(|e| format!("import: {e}"))??;
+
+    if items.is_empty() {
+        return Err("Playlist vazia ou sem faixas tocaveis.".into());
+    }
+
+    let total = items.len();
+    let added = state.queue.lock().append_unique(items);
+    let skipped = total.saturating_sub(added);
+
+    if added > 0 {
+        crate::stream::prewarm_queue_ahead(&state);
+        queue_refill::maybe_refill_queue(&state);
+    }
+
+    Ok(ImportPlaylistResult {
+        added,
+        skipped,
+        total,
+    })
 }
 
 #[tauri::command]

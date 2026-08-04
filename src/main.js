@@ -87,6 +87,7 @@ let lyricLineEls = [];
 let lastLyricIdx = -1;
 let lyricsLoadToken = 0;
 let lyricsDelayTimer = null;
+let karaokeMode = false;
 let trackSwitchInProgress = false;
 const streamCache = new Map();
 const PREWARM_AHEAD = 3;
@@ -206,7 +207,25 @@ function scheduleLyricsLoad(video) {
   }
   lyricsDelayTimer = setTimeout(() => {
     void loadLyrics(video);
-  }, 2000);
+  }, 600);
+}
+
+function setKaraokeMode(on) {
+  karaokeMode = Boolean(on);
+  document.body.classList.toggle("lyrics-karaoke", karaokeMode);
+  const btn = $("btn-karaoke");
+  if (btn) {
+    btn.setAttribute("aria-pressed", karaokeMode ? "true" : "false");
+    btn.textContent = karaokeMode ? "[ Fechar ]" : "[ Karaoke ]";
+    btn.title = karaokeMode ? "Sair do modo karaoke" : "Modo karaoke — ampliar letra";
+  }
+}
+
+function toggleKaraoke() {
+  setKaraokeMode(!karaokeMode);
+  if (karaokeMode && lastLyricIdx >= 0 && lyricLineEls[lastLyricIdx]) {
+    lyricLineEls[lastLyricIdx].scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 }
 
 async function loadLyrics(video) {
@@ -246,7 +265,16 @@ async function loadLyrics(video) {
 
 function renderLyrics(lines) {
   const scroll = $("lyrics-scroll");
-  if (!scroll || !Array.isArray(lines) || !lines.length) return;
+  if (!scroll || !Array.isArray(lines) || !lines.length) {
+    if (scroll) {
+      scroll.replaceChildren();
+      const p = document.createElement("p");
+      p.className = "lyrics-placeholder muted";
+      p.textContent = "sem letra sincronizada";
+      scroll.appendChild(p);
+    }
+    return;
+  }
 
   scroll.replaceChildren();
   lyricLines = lines;
@@ -1107,6 +1135,8 @@ $("btn-logo-home")?.addEventListener("click", () => goHomeFeed(true));
 
 $("btn-theme")?.addEventListener("click", () => toggleTheme());
 
+$("btn-karaoke")?.addEventListener("click", () => toggleKaraoke());
+
 $("btn-nav-home")?.addEventListener("click", () => goHomeFeed(false));
 
 $("btn-play-rec-row")?.addEventListener("click", () => playRow(feedCache?.recommended));
@@ -1125,6 +1155,10 @@ $("btn-open-history-pl")?.addEventListener("click", buildRecommendedPlaylist);
 
 document.addEventListener("keydown", (e) => {
   const tag = e.target?.tagName;
+  if (e.key === "Escape" && karaokeMode) {
+    setKaraokeMode(false);
+    return;
+  }
   if (tag === "INPUT" || tag === "TEXTAREA") {
     if (e.key === "Escape") e.target.blur();
     return;
@@ -1227,6 +1261,46 @@ $("btn-clear-queue")?.addEventListener("click", async () => {
     setStatus("queue cleared");
   } catch (e) {
     setStatus(String(e));
+  }
+});
+
+async function importPlaylistFromUrl() {
+  const input = $("queue-import-url");
+  const url = input?.value.trim();
+  if (!url) {
+    setStatus("cole o link da playlist");
+    input?.focus();
+    return;
+  }
+  const btn = $("btn-import-playlist");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await withLoading(
+      "IMPORTANDO PLAYLIST...",
+      "lendo faixas via yt-dlp",
+      async () => tauriInvoke("import_playlist", { url })
+    );
+    if (input) input.value = "";
+    await refreshQueue();
+    const msg =
+      res.skipped > 0
+        ? `+${res.added} na fila (${res.skipped} ja estavam)`
+        : `+${res.added} faixas importadas`;
+    setStatus(msg);
+    void prewarmNextInQueue();
+  } catch (e) {
+    setStatus(String(e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+$("btn-import-playlist")?.addEventListener("click", () => void importPlaylistFromUrl());
+
+$("queue-import-url")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    void importPlaylistFromUrl();
   }
 });
 

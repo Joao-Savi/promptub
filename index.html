@@ -78,7 +78,18 @@
         </nav>
 
         <section class="lyrics-panel" aria-label="Letra da musica">
-          <div class="term-header lyrics-header"><span class="term-dots">●●●</span>LYRICS.SYS</div>
+          <div class="lyrics-toolbar">
+            <div class="term-header lyrics-header"><span class="term-dots">●●●</span>LYRICS.SYS</div>
+            <button
+              type="button"
+              id="btn-karaoke"
+              class="btn-karaoke"
+              title="Modo karaoke — ampliar letra"
+              aria-pressed="false"
+            >
+              [ Karaoke ]
+            </button>
+          </div>
           <p id="lyrics-track" class="lyrics-track muted">_aguardando faixa</p>
           <div id="lyrics-scroll" class="lyrics-scroll">
             <p class="lyrics-placeholder muted">Toque uma musica para ver a letra.</p>
@@ -214,7 +225,7 @@
 
             <section id="panel-welcome" class="panel md-doc">
               <pre class="welcome-ascii" aria-hidden="true"><code>╔══════════════════════════════════════╗
-║  PROMPTUB v0.5.2  //  TERMINAL         ║
+║  PROMPTUB v0.5.3  //  TERMINAL         ║
 ║  player: HTML5 · stream: yt-dlp      ║
 ╚══════════════════════════════════════╝</code></pre>
               <h2 id="welcome-title">Bem-vindo</h2>
@@ -236,6 +247,21 @@
         <div class="queue-header">
           <h2 id="queue-title">Fila</h2>
           <button id="btn-clear-queue" class="btn-icon" title="Limpar fila">CLR</button>
+        </div>
+        <div class="queue-import">
+          <label class="queue-import-label" for="queue-import-url">Importar playlist</label>
+          <div class="queue-import-row">
+            <input
+              id="queue-import-url"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="cole o link do youtube..."
+            />
+            <button id="btn-import-playlist" class="btn-icon" type="button" title="Importar para a fila">
+              OK
+            </button>
+          </div>
         </div>
         <ul id="queue-list" class="queue-list"></ul>
       </aside>

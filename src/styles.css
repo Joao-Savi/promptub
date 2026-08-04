@@ -235,6 +235,81 @@ body::before {
   gap: 0.35rem;
 }
 
+.lyrics-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.btn-karaoke {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  padding: 0.12rem 0.4rem;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.btn-karaoke:hover,
+.btn-karaoke[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+body.lyrics-karaoke #app::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+  z-index: 150;
+  pointer-events: none;
+}
+
+body.lyrics-karaoke .lyrics-panel {
+  position: fixed;
+  inset: 1.25rem 2rem 5.75rem 1.25rem;
+  z-index: 200;
+  flex: none;
+  min-height: auto;
+  max-height: none;
+  height: auto;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  box-shadow: var(--glow);
+  padding: 1rem 1.15rem 1.1rem;
+  margin: 0;
+}
+
+body.lyrics-karaoke .lyrics-scroll {
+  flex: 1;
+  min-height: 12rem;
+  max-height: calc(100vh - 11rem);
+  font-size: 1.1rem;
+  line-height: 1.85;
+  text-align: center;
+}
+
+body.lyrics-karaoke .lyrics-line {
+  padding: 0.4rem 0.55rem;
+}
+
+body.lyrics-karaoke .lyrics-line.active {
+  font-size: 1.35rem;
+  letter-spacing: 0.02em;
+}
+
+body.lyrics-karaoke .lyrics-track {
+  text-align: center;
+  font-size: 0.75rem;
+  white-space: normal;
+}
+
 .lyrics-header {
   margin-bottom: 0;
   padding-bottom: 0.3rem;
@@ -711,6 +786,49 @@ body::before {
 .btn-icon:hover {
   color: var(--accent);
   border-color: var(--accent-dim);
+}
+
+.queue-import {
+  margin-bottom: 0.65rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.queue-import-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+  text-transform: lowercase;
+}
+
+.queue-import-row {
+  display: flex;
+  gap: 0.35rem;
+  align-items: stretch;
+}
+
+.queue-import-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 3px;
+}
+
+.queue-import-row input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
+.queue-import-row .btn-icon {
+  flex-shrink: 0;
+  padding: 0.35rem 0.55rem;
 }
 
 .queue-list {

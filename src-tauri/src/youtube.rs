@@ -17,6 +17,7 @@ pub struct Video {
 const PRINT_FIELDS: &str = "%(id)s\t%(title)s\t%(uploader)s\t%(duration_string)s\t%(live_status)s";
 
 pub const SEARCH_LIMIT: usize = 10;
+pub const PLAYLIST_MAX: usize = 100;
 
 impl Video {
     pub(crate) fn from_line(line: &str) -> Option<Self> {
@@ -153,6 +154,54 @@ pub(crate) fn fetch_track(cookies: &str, video_id: &str) -> Result<Option<Video>
         url,
     ]);
     Ok(run_list(args)?.into_iter().next())
+}
+
+pub fn is_youtube_playlist_url(input: &str) -> bool {
+    normalize_playlist_url(input).is_some()
+}
+
+pub fn normalize_playlist_url(input: &str) -> Option<String> {
+    let s = input.trim();
+    let lower = s.to_lowercase();
+    if !lower.contains("list=") {
+        return None;
+    }
+    if !lower.contains("youtube.com")
+        && !lower.contains("youtu.be")
+        && !lower.contains("music.youtube.com")
+    {
+        return None;
+    }
+    let list_id: String = s
+        .split("list=")
+        .nth(1)?
+        .chars()
+        .take_while(|c| *c != '&' && *c != '#')
+        .collect();
+    if list_id.len() < 10 {
+        return None;
+    }
+    Some(format!(
+        "https://www.youtube.com/playlist?list={list_id}"
+    ))
+}
+
+pub fn fetch_playlist(cookies: &str, url: &str, limit: usize) -> Result<Vec<Video>, String> {
+    let mut args = ytdlp_base(cookies);
+    push_yt_extractor(&mut args, cookies);
+    args.extend([
+        "--flat-playlist".into(),
+        "--playlist-end".into(),
+        limit.to_string(),
+        "--print".into(),
+        PRINT_FIELDS.into(),
+        url.to_string(),
+    ]);
+    let items = run_list(args)?;
+    Ok(items
+        .into_iter()
+        .filter(|v| crate::discover::is_playable_track(v))
+        .collect())
 }
 
 use crate::state::SharedState;
@@ -307,5 +356,17 @@ mod security_tests {
         assert!(is_youtube_watch_url("dQw4w9WgXcQ"));
         assert!(is_youtube_watch_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
         assert!(!is_youtube_watch_url("https://evil.com/watch?v=dQw4w9WgXcQ"));
+    }
+
+    #[test]
+    fn normalizes_playlist_url() {
+        let url = normalize_playlist_url(
+            "https://www.youtube.com/watch?v=abc12345678&list=PLrAXtmRdnEQy6nuLMH",
+        )
+        .unwrap();
+        assert!(url.contains("list=PLrAXtmRdnEQy6nuLMH"));
+        assert!(is_youtube_playlist_url(
+            "https://music.youtube.com/playlist?list=PLabcdefghijklmnop"
+        ));
     }
 }

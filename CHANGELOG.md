@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.3] — 2026-08-04
+
+### Letras, karaoke e importar playlist
+- **Antes:** letras nunca apareciam (comando Tauri errado); sem modo karaoke; sem importar playlist do YouTube na fila
+- **Agora:** letras via LRCLIB (HTTP nativo) + fallback legendas YouTube; botão `[ Karaoke ]` amplia a letra na tela; importar playlist YouTube acima da fila (até 100 faixas)
+
+---
+
 ## [0.5.2] — 2026-08-03
 
 ### Recomendados e nomes simples

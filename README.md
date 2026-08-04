@@ -43,7 +43,8 @@ O **promptub** abre uma janela nativa pequena (~80–150 MB de RAM) para buscar,
 - Fila inteligente com recarga automática (gênero, artistas parecidos, histórico)
 - Playlists: **Pra você** · **Do artista** · **Misturado** · **Novidades**
 - **Like / Dislike** (♥ / ✕) na barra do player — molda fila e recomendações
-- Letras sincronizadas (LYRICS.SYS)
+- Letras sincronizadas (LYRICS.SYS) com **modo karaoke** (`[ Karaoke ]`)
+- **Importar playlist** do YouTube na fila (cole o link com `list=PL...`)
 - Tema **noite** (vermelho) e **dia** (mono claro) — botão `dia`/`noite` na barra do player
 - Login opcional `[ AUTH ]` para sessão YouTube Premium
 
@@ -114,7 +115,7 @@ promptub/
 
 ## Versão
 
-Versão atual: **0.5.2** — ver [CHANGELOG.md](CHANGELOG.md) e [VERSION.md](VERSION.md).
+Versão atual: **0.5.3** — ver [CHANGELOG.md](CHANGELOG.md) e [VERSION.md](VERSION.md).
 
 ---
 
