@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.6] — 2026-08-04
+
+### Sync karaoke das letras
+- **Antes:** letra adiantava antes da voz (lead artificial + plain desde 0 s)
+- **Agora:** legendas do YouTube primeiro; timestamps exatos; intro sem destaque; letras plain com estimativa de entrada vocal
+
+---
+
 ## [0.5.5] — 2026-08-04
 
 ### Letras e fila automatica

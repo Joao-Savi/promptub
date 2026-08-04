@@ -93,10 +93,8 @@ let trackSwitchInProgress = false;
 const streamCache = new Map();
 const PREWARM_AHEAD = 3;
 const VOLUME_STEP = 5;
-/** Antecipa o destaque; compensa drift ao longo da faixa. */
-const LYRICS_LEAD_BASE = 0.55;
-const LYRICS_DRIFT_RATE = 0.035;
-let lyricsPlainTiming = false;
+let lyricsSynced = true;
+let lyricsRescaled = false;
 
 function adjustVolume(delta) {
   if (!htmlAudio || !volumeSlider) return;
@@ -269,31 +267,39 @@ async function loadLyrics(video) {
 }
 
 function isPlainLyricsTiming(lines) {
+  if (!lines.length || lines.some((l) => l.synced === true)) return false;
   if (lines.length < 3) return false;
   for (let i = 1; i < Math.min(lines.length, 8); i++) {
     const gap = lines[i].start - lines[i - 1].start;
     if (Math.abs(gap - 3.0) > 0.08) return false;
   }
-  return true;
+  return Math.abs(lines[0].start) < 0.05;
 }
 
 function rescaleLyricsToDuration(lines, duration) {
   if (!duration || !Number.isFinite(duration) || duration < 15 || !lines.length) return lines;
-  const vocalStart = lines[0].start > 2 ? lines[0].start * 0.5 : 0;
-  const usable = Math.max(duration - vocalStart - 3, lines.length * 1.2);
+  const intro = Math.min(45, Math.max(18, duration * 0.12));
+  const outro = 8;
+  const usable = Math.max(duration - intro - outro, lines.length * 2.5);
   const step = usable / lines.length;
   return lines.map((line, i) => ({
     text: line.text,
-    start: vocalStart + i * step,
-    end: vocalStart + (i + 1) * step,
+    start: intro + i * step,
+    end: intro + (i + 1) * step,
+    synced: false,
   }));
 }
 
 function applyLyricsDurationScale() {
-  if (!lyricsPlainTiming || !htmlAudio?.duration || !lyricLines.length) return;
-  const scaled = rescaleLyricsToDuration(lyricLines, htmlAudio.duration);
-  lyricLines = scaled;
-  lyricsPlainTiming = false;
+  if (lyricsSynced || !lyricLines.length || !htmlAudio?.duration) return;
+  lyricLines = rescaleLyricsToDuration(lyricLines, htmlAudio.duration);
+  lyricsRescaled = true;
+  rebuildLyricElements();
+  lastLyricIdx = -1;
+  syncLyricsHighlight();
+}
+
+function rebuildLyricElements() {
   const scroll = $("lyrics-scroll");
   if (!scroll) return;
   scroll.replaceChildren();
@@ -311,19 +317,37 @@ function applyLyricsDurationScale() {
     scroll.appendChild(p);
     return p;
   });
-  lastLyricIdx = -1;
-  syncLyricsHighlight();
 }
 
-function lyricsEffectiveTime() {
-  const t = htmlAudio.currentTime;
-  return t + LYRICS_LEAD_BASE + t * LYRICS_DRIFT_RATE;
+function findActiveLyricIndex(t) {
+  if (!lyricLines.length) return -1;
+
+  if (lyricsSynced) {
+    if (t < lyricLines[0].start) return -1;
+    for (let i = lyricLines.length - 1; i >= 0; i--) {
+      const line = lyricLines[i];
+      const next = lyricLines[i + 1];
+      if (t >= line.start && (!next || t < next.start)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  if (!lyricsRescaled || t < lyricLines[0].start) return -1;
+  for (let i = lyricLines.length - 1; i >= 0; i--) {
+    if (t >= lyricLines[i].start) return i;
+  }
+  return -1;
 }
 
 function renderLyrics(lines) {
-  lyricsPlainTiming = isPlainLyricsTiming(lines);
-  if (lyricsPlainTiming && htmlAudio?.duration) {
+  lyricsSynced = lines.length > 0 && lines.every((l) => l.synced !== false) && !isPlainLyricsTiming(lines);
+  lyricsRescaled = false;
+
+  if (!lyricsSynced && htmlAudio?.duration) {
     lines = rescaleLyricsToDuration(lines, htmlAudio.duration);
+    lyricsRescaled = true;
   }
   const scroll = $("lyrics-scroll");
   if (!scroll || !Array.isArray(lines) || !lines.length) {
@@ -358,15 +382,8 @@ function renderLyrics(lines) {
 function syncLyricsHighlight() {
   if (!htmlAudio || !lyricLines.length || !lyricLineEls.length) return;
 
-  const t = lyricsEffectiveTime();
-  let activeIdx = -1;
-
-  for (let i = lyricLines.length - 1; i >= 0; i--) {
-    if (t >= lyricLines[i].start) {
-      activeIdx = i;
-      break;
-    }
-  }
+  const t = htmlAudio.currentTime;
+  const activeIdx = findActiveLyricIndex(t);
 
   if (activeIdx === lastLyricIdx) return;
 

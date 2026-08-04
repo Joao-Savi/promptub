@@ -11,6 +11,13 @@ pub struct LyricLine {
     pub start: f64,
     pub end: f64,
     pub text: String,
+    /// Timestamps reais (LRC/legendas). False = estimativa, nao usar lead agressivo.
+    #[serde(default = "default_synced")]
+    pub synced: bool,
+}
+
+fn default_synced() -> bool {
+    true
 }
 
 pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -> Result<Vec<LyricLine>, String> {
@@ -21,15 +28,16 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
 
     let meta = parse_lyrics_meta(title, artist);
 
-    if let Ok(lines) = fetch_lrclib(&meta) {
-        return Ok(lines);
-    }
-
+    // Legendas deste video no YouTube — melhor sync para karaoke
     if let Ok(lines) = fetch_youtube_subs(cookies, id) {
         return Ok(lines);
     }
 
-    Err("Letra nao encontrada para esta faixa".into())
+    if let Ok(lines) = fetch_lrclib(&meta, true) {
+        return Ok(lines);
+    }
+
+    fetch_lrclib(&meta, false)
 }
 
 #[derive(Clone)]
@@ -95,7 +103,7 @@ fn strip_bracket_tags(s: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn fetch_lrclib(meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
+fn fetch_lrclib(meta: &LyricsMeta, synced_only: bool) -> Result<Vec<LyricLine>, String> {
     const NO_ARTIST: &str = "";
     let pairs = [
         (&meta.track_short, meta.artist.as_str()),
@@ -108,7 +116,7 @@ fn fetch_lrclib(meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
         if track.is_empty() {
             continue;
         }
-        if let Ok(lines) = lrclib_get(track, artist) {
+        if let Ok(lines) = lrclib_get(track, artist, synced_only) {
             return Ok(lines);
         }
     }
@@ -122,15 +130,19 @@ fn fetch_lrclib(meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
         if query.trim().is_empty() {
             continue;
         }
-        if let Ok(lines) = lrclib_search(query, &meta.artist) {
+        if let Ok(lines) = lrclib_search(query, &meta.artist, synced_only) {
             return Ok(lines);
         }
     }
 
-    Err("Letra sincronizada nao encontrada".into())
+    Err(if synced_only {
+        "Letra sincronizada nao encontrada".into()
+    } else {
+        "Letra nao encontrada".into()
+    })
 }
 
-fn lrclib_get(track: &str, artist: &str) -> Result<Vec<LyricLine>, String> {
+fn lrclib_get(track: &str, artist: &str, synced_only: bool) -> Result<Vec<LyricLine>, String> {
     let url = if artist.trim().is_empty() {
         format!(
             "https://lrclib.net/api/get?track_name={}",
@@ -144,10 +156,10 @@ fn lrclib_get(track: &str, artist: &str) -> Result<Vec<LyricLine>, String> {
         )
     };
     let body = http_get(&url)?;
-    parse_lrclib_response(&body, artist)
+    parse_lrclib_response(&body, artist, synced_only)
 }
 
-fn lrclib_search(query: &str, prefer_artist: &str) -> Result<Vec<LyricLine>, String> {
+fn lrclib_search(query: &str, prefer_artist: &str, synced_only: bool) -> Result<Vec<LyricLine>, String> {
     let url = format!(
         "https://lrclib.net/api/search?q={}",
         url_encode(query.trim())
@@ -186,25 +198,29 @@ fn lrclib_search(query: &str, prefer_artist: &str) -> Result<Vec<LyricLine>, Str
     if let Some(lrc) = fallback {
         return parse_lrc(&lrc);
     }
-    if let Some(plain) = plain_fallback {
-        return Ok(plain_to_lines(&plain));
+    if !synced_only {
+        if let Some(plain) = plain_fallback {
+            return Ok(plain_to_lines(&plain));
+        }
     }
     Err("LRCLIB sem letra".into())
 }
 
-fn parse_lrclib_response(raw: &str, prefer_artist: &str) -> Result<Vec<LyricLine>, String> {
+fn parse_lrclib_response(raw: &str, prefer_artist: &str, synced_only: bool) -> Result<Vec<LyricLine>, String> {
     let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
     if let Some(arr) = v.as_array() {
-        return lrclib_search_result(arr, prefer_artist);
+        return lrclib_search_result(arr, prefer_artist, synced_only);
     }
     if let Some(lrc) = v.get("syncedLyrics").and_then(|x| x.as_str()) {
         if !lrc.trim().is_empty() {
             return parse_lrc(lrc);
         }
     }
-    if let Some(plain) = v.get("plainLyrics").and_then(|x| x.as_str()) {
-        if !plain.trim().is_empty() {
-            return Ok(plain_to_lines(plain));
+    if !synced_only {
+        if let Some(plain) = v.get("plainLyrics").and_then(|x| x.as_str()) {
+            if !plain.trim().is_empty() {
+                return Ok(plain_to_lines(plain));
+            }
         }
     }
     Err("LRCLIB resposta sem letra".into())
@@ -219,11 +235,12 @@ fn plain_to_lines(text: &str) -> Vec<LyricLine> {
             start: i as f64 * 3.0,
             end: (i + 1) as f64 * 3.0,
             text: line.to_string(),
+            synced: false,
         })
         .collect()
 }
 
-fn lrclib_search_result(items: &[serde_json::Value], prefer_artist: &str) -> Result<Vec<LyricLine>, String> {
+fn lrclib_search_result(items: &[serde_json::Value], prefer_artist: &str, synced_only: bool) -> Result<Vec<LyricLine>, String> {
     let mut fallback: Option<&str> = None;
     let mut plain_fallback: Option<&str> = None;
     for item in items {
@@ -253,8 +270,10 @@ fn lrclib_search_result(items: &[serde_json::Value], prefer_artist: &str) -> Res
     if let Some(lrc) = fallback {
         return parse_lrc(lrc);
     }
-    if let Some(plain) = plain_fallback {
-        return Ok(plain_to_lines(plain));
+    if !synced_only {
+        if let Some(plain) = plain_fallback {
+            return Ok(plain_to_lines(plain));
+        }
     }
     Err("LRCLIB array vazio".into())
 }
@@ -492,7 +511,7 @@ fn parse_json3(raw: &str) -> Result<Vec<LyricLine>, String> {
 
         let start = start_ms as f64 / 1000.0;
         let end = ((start_ms + dur_ms.max(500)) as f64) / 1000.0;
-        lines.push(LyricLine { start, end, text });
+        lines.push(LyricLine { start, end, text, synced: true });
     }
 
     finalize_line_ends(&mut lines);
@@ -528,7 +547,7 @@ fn parse_vtt(raw: &str) -> Result<Vec<LyricLine>, String> {
                 }
                 let text = clean_caption_text(&text);
                 if !text.is_empty() {
-                    lines.push(LyricLine { start, end, text });
+                    lines.push(LyricLine { start, end, text, synced: true });
                 }
                 continue;
             }
@@ -558,7 +577,7 @@ fn parse_srt(raw: &str) -> Result<Vec<LyricLine>, String> {
             .join(" ");
         let text = clean_caption_text(&text);
         if !text.is_empty() {
-            lines.push(LyricLine { start, end, text });
+            lines.push(LyricLine { start, end, text, synced: true });
         }
     }
     finalize_line_ends(&mut lines);
@@ -590,6 +609,7 @@ fn parse_lrc(raw: &str) -> Result<Vec<LyricLine>, String> {
                         start,
                         end: start + 4.0,
                         text,
+                        synced: true,
                     });
                     break;
                 }
