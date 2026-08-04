@@ -68,9 +68,10 @@ fn refill_worker(
         .refill_generation
         .fetch_add(1, Ordering::Relaxed);
 
-    let (exclude, exclude_fps, uploader_counts, alt_seeds, ctx, taste) = {
+    let (exclude, exclude_fps, uploader_counts, alt_seeds, ctx, taste, queue_len) = {
         let q = state.queue.lock();
         let history = state.watch_history.lock();
+        let queue_len = q.len();
         let mut exclude = q.existing_ids();
         for id in history.played_ids() {
             exclude.insert(id);
@@ -92,6 +93,7 @@ fn refill_worker(
             alternate_seeds(&q, seed),
             ctx,
             taste,
+            queue_len,
         )
     };
 
@@ -99,6 +101,12 @@ fn refill_worker(
     let seed_artist = artist_key(seed);
 
     let mut sources: Vec<Vec<Video>> = Vec::new();
+
+    if queue_len <= 1 {
+        if let Ok(mix) = youtube::fetch_mix(cookies, &seed.id, 20) {
+            sources.push(filter_relevant(&ctx, mix));
+        }
+    }
 
     match rotation % 3 {
         0 => {
@@ -123,7 +131,7 @@ fn refill_worker(
 
     let interleaved = interleave_sources(sources);
     let filtered = filter_relevant(&ctx, interleaved);
-    let picked = pick_diverse_candidates(
+    let mut picked = pick_diverse_candidates(
         filtered,
         &exclude,
         &exclude_fps,
@@ -133,6 +141,42 @@ fn refill_worker(
         Some(&ctx),
         Some(&taste),
     );
+
+    if picked.is_empty() {
+        if let Ok(mix) = youtube::fetch_mix(cookies, &seed.id, REFILL_BATCH + 6) {
+            let relaxed = filter_relevant(&ctx, mix);
+            picked = pick_diverse_candidates(
+                relaxed,
+                &exclude,
+                &HashSet::new(),
+                &uploader_counts,
+                &seed_artist,
+                REFILL_BATCH,
+                Some(&ctx),
+                None,
+            );
+        }
+    }
+
+    if picked.is_empty() {
+        for q in queries.iter().take(2) {
+            if let Ok(items) = youtube::fetch_search(cookies, q, 8) {
+                picked = pick_diverse_candidates(
+                    filter_relevant(&ctx, items),
+                    &exclude,
+                    &HashSet::new(),
+                    &uploader_counts,
+                    &seed_artist,
+                    REFILL_BATCH,
+                    None,
+                    None,
+                );
+                if !picked.is_empty() {
+                    break;
+                }
+            }
+        }
+    }
 
     if picked.is_empty() {
         return Ok(0);

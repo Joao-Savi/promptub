@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.5] — 2026-08-04
+
+### Letras e fila automatica
+- **Antes:** letra ia atrasando ao longo da musica; tocar uma faixa sozinha nao gerava fila
+- **Agora:** letras plain redistribuidas pela duracao + compensacao de drift; fila preenche com mix do YouTube na primeira musica
+
+---
+
 ## [0.5.4] — 2026-08-04
 
 ### Sincronia das letras e importar playlist

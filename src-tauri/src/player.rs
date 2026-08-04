@@ -60,8 +60,19 @@ pub fn play(
     set_queue: bool,
     _audio_only: bool,
 ) -> Result<(), String> {
-    if set_queue {
-        state.queue.lock().play_now(video.clone());
+    {
+        let mut queue = state.queue.lock();
+        if set_queue {
+            queue.play_now(video.clone());
+        } else if queue.current_video().is_none() {
+            if queue.is_empty() {
+                queue.add(video.clone());
+            } else {
+                let idx = queue.len();
+                queue.add(video.clone());
+                queue.jump_to(idx);
+            }
+        }
     }
     track_play(&state, &video);
     Ok(())
