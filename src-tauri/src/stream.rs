@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const CACHE_TTL: Duration = Duration::from_secs(45 * 60);
-const DISK_CACHE_TTL_SECS: u64 = 45 * 60;
+const CACHE_TTL: Duration = Duration::from_secs(25 * 60);
+const DISK_CACHE_TTL_SECS: u64 = 25 * 60;
 const DISK_CACHE_MAX: usize = 48;
 pub const PREWARM_AHEAD: usize = 3;
 
@@ -40,6 +40,12 @@ impl StreamCache {
             prewarm_total: Arc::new(AtomicUsize::new(0)),
             prewarm_done: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    pub fn invalidate(&self, video_id: &str) {
+        let mut map = self.entries.lock();
+        map.remove(video_id);
+        save_disk_cache(&map);
     }
 
     pub fn get(&self, video_id: &str) -> Option<String> {

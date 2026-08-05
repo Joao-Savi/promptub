@@ -14,12 +14,15 @@ pub async fn resolve_stream(
     state: tauri::State<'_, SharedState>,
     video_id: String,
     video_url: Option<String>,
+    force: Option<bool>,
 ) -> Result<String, String> {
     let id = video_id.trim().to_string();
     if youtube::parse_youtube_id(&id).is_none() {
         return Err("ID invalido".into());
     }
-    if let Some(cached) = state.stream_cache.get(&id) {
+    if force.unwrap_or(false) {
+        state.stream_cache.invalidate(&id);
+    } else if let Some(cached) = state.stream_cache.get(&id) {
         return Ok(cached);
     }
     let cookies = state.cookies();

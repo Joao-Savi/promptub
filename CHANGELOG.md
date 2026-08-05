@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.7] — 2026-08-05
+
+### Stream, letras e sync
+- **Antes:** musica travava sem recuperar; letras com lixo de legenda auto; sync ~0,5 s atrasada
+- **Agora:** reconexao automatica do stream; LRCLIB primeiro + filtro de junk; antecipacao de 0,5 s na letra sincronizada
+
+---
+
 ## [0.5.6] — 2026-08-04
 
 ### Sync karaoke das letras

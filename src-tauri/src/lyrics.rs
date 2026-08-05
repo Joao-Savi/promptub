@@ -28,16 +28,24 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
 
     let meta = parse_lyrics_meta(title, artist);
 
-    // Legendas deste video no YouTube — melhor sync para karaoke
-    if let Ok(lines) = fetch_youtube_subs(cookies, id) {
-        return Ok(lines);
-    }
-
+    // LRCLIB sincronizado primeiro — evita legendas auto com lixo
     if let Ok(lines) = fetch_lrclib(&meta, true) {
-        return Ok(lines);
+        if let Ok(clean) = sanitize_lyrics(lines) {
+            return Ok(clean);
+        }
     }
 
-    fetch_lrclib(&meta, false)
+    if let Ok(lines) = fetch_youtube_subs(cookies, id) {
+        if let Ok(clean) = sanitize_lyrics(lines) {
+            return Ok(clean);
+        }
+    }
+
+    if let Ok(lines) = fetch_lrclib(&meta, false) {
+        return sanitize_lyrics(lines);
+    }
+
+    Err("Letra nao encontrada para esta faixa".into())
 }
 
 #[derive(Clone)]
@@ -293,13 +301,16 @@ fn normalize_artist(s: &str) -> String {
 }
 
 fn fetch_youtube_subs(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>, String> {
-    if let Ok(lines) = download_subs_to_dir(cookies, video_id) {
+    if let Ok(lines) = download_subs_to_dir(cookies, video_id, false) {
+        return Ok(lines);
+    }
+    if let Ok(lines) = download_subs_to_dir(cookies, video_id, true) {
         return Ok(lines);
     }
     download_subs_from_info(cookies, video_id)
 }
 
-fn download_subs_to_dir(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>, String> {
+fn download_subs_to_dir(cookies: &str, video_id: &str, auto: bool) -> Result<Vec<LyricLine>, String> {
     let ytdlp = find_ytdlp().ok_or("yt-dlp nao encontrado")?;
     let tmp = std::env::temp_dir().join(format!("promptub-lyrics-{video_id}"));
     let _ = fs::remove_dir_all(&tmp);
@@ -311,8 +322,6 @@ fn download_subs_to_dir(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>,
     for fmt in ["json3", "vtt", "srt"] {
         let mut args = vec![
             "--skip-download".into(),
-            "--write-auto-subs".into(),
-            "--write-subs".into(),
             "--sub-langs".into(),
             "pt,pt-BR,en".into(),
             "--sub-format".into(),
@@ -323,6 +332,11 @@ fn download_subs_to_dir(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>,
             out_tpl.clone(),
             url.clone(),
         ];
+        if auto {
+            args.insert(1, "--write-auto-subs".into());
+        } else {
+            args.insert(1, "--write-subs".into());
+        };
         if !cookies.is_empty() {
             args.push("--cookies".into());
             args.push(cookies.into());
@@ -371,25 +385,28 @@ fn ytdlp_dump_json(cookies: &str, video_id: &str) -> Result<serde_json::Value, S
 }
 
 fn pick_sub_url(info: &serde_json::Value) -> Option<String> {
+    if let Some(url) = pick_sub_url_from_key(info, "subtitles") {
+        return Some(url);
+    }
+    pick_sub_url_from_key(info, "automatic_captions")
+}
+
+fn pick_sub_url_from_key(info: &serde_json::Value, key: &str) -> Option<String> {
     const LANGS: &[&str] = &["pt", "pt-BR", "pt-PT", "en", "en-US", "en-GB"];
     const FORMATS: &[&str] = &["json3", "srv3", "vtt", "srt"];
 
-    for key in ["subtitles", "automatic_captions"] {
-        let Some(obj) = info.get(key).and_then(|v| v.as_object()) else {
-            continue;
-        };
+    let obj = info.get(key)?.as_object()?;
 
-        for lang in LANGS {
-            if let Some(url) = sub_url_for_lang(obj, lang, FORMATS) {
-                return Some(url);
-            }
+    for lang in LANGS {
+        if let Some(url) = sub_url_for_lang(obj, lang, FORMATS) {
+            return Some(url);
         }
+    }
 
-        for (lang, entries) in obj {
-            if lang.starts_with("pt") || lang.starts_with("en") {
-                if let Some(url) = sub_url_from_entries(entries, FORMATS) {
-                    return Some(url);
-                }
+    for (lang, entries) in obj {
+        if lang.starts_with("pt") || lang.starts_with("en") {
+            if let Some(url) = sub_url_from_entries(entries, FORMATS) {
+                return Some(url);
             }
         }
     }
@@ -508,6 +525,9 @@ fn parse_json3(raw: &str) -> Result<Vec<LyricLine>, String> {
         if text.is_empty() || text.chars().all(|c| matches!(c, '♪' | '♫' | ' ')) {
             continue;
         }
+        if is_junk_lyric_line(&text) {
+            continue;
+        }
 
         let start = start_ms as f64 / 1000.0;
         let end = ((start_ms + dur_ms.max(500)) as f64) / 1000.0;
@@ -546,7 +566,7 @@ fn parse_vtt(raw: &str) -> Result<Vec<LyricLine>, String> {
                     i += 1;
                 }
                 let text = clean_caption_text(&text);
-                if !text.is_empty() {
+                if !text.is_empty() && !is_junk_lyric_line(&text) {
                     lines.push(LyricLine { start, end, text, synced: true });
                 }
                 continue;
@@ -576,7 +596,7 @@ fn parse_srt(raw: &str) -> Result<Vec<LyricLine>, String> {
             .collect::<Vec<_>>()
             .join(" ");
         let text = clean_caption_text(&text);
-        if !text.is_empty() {
+        if !text.is_empty() && !is_junk_lyric_line(&text) {
             lines.push(LyricLine { start, end, text, synced: true });
         }
     }
@@ -604,7 +624,7 @@ fn parse_lrc(raw: &str) -> Result<Vec<LyricLine>, String> {
             if let Some(start) = parse_lrc_timestamp(ts) {
                 rest = rest[end + 1..].trim();
                 let text = clean_caption_text(rest);
-                if !text.is_empty() && !rest.starts_with('[') {
+                if !text.is_empty() && !rest.starts_with('[') && !is_junk_lyric_line(&text) {
                     lines.push(LyricLine {
                         start,
                         end: start + 4.0,
@@ -681,6 +701,82 @@ fn clean_caption_text(text: &str) -> String {
         .replace("</b>", "")
         .trim()
         .to_string()
+}
+
+fn is_junk_lyric_line(text: &str) -> bool {
+    let t = text.trim();
+    if t.len() < 2 {
+        return true;
+    }
+    if t.len() > 160 {
+        return true;
+    }
+    let lower = t.to_lowercase();
+    if lower.contains("http")
+        || lower.contains("www.")
+        || lower.contains(".com")
+        || lower.contains("google")
+        || lower.contains("pesquis")
+        || lower.contains("search")
+        || lower.contains("bing")
+        || lower.contains("yahoo")
+    {
+        return true;
+    }
+    const JUNK: &[&str] = &[
+        "inscreva",
+        "subscribe",
+        "like and",
+        "se inscrev",
+        "ative o sininho",
+        "clique em",
+        "click ",
+        "copyright",
+        "legendas pela",
+        "captions by",
+        "amara.org",
+        "sync by",
+        "[music",
+        "[música",
+        "[musica",
+        "[applause",
+        "[risad",
+        "whatsapp",
+        "instagram",
+        "facebook",
+        "tiktok",
+        "spotify",
+        "deezer",
+        "baixe ",
+        "download",
+        "visite ",
+        "acesse ",
+        "canal oficial",
+        "official video",
+        "video oficial",
+        "produzido por",
+        "all rights",
+        "todos os direitos",
+    ];
+    for needle in JUNK {
+        if lower.contains(needle) {
+            return true;
+        }
+    }
+    if t.chars().filter(|c| c.is_ascii_digit()).count() > t.len() / 3 {
+        return true;
+    }
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    letters < t.len() / 4
+}
+
+fn sanitize_lyrics(mut lines: Vec<LyricLine>) -> Result<Vec<LyricLine>, String> {
+    lines.retain(|l| !is_junk_lyric_line(&l.text));
+    if lines.len() < 4 {
+        return Err("Letra insuficiente apos filtro".into());
+    }
+    finalize_line_ends(&mut lines);
+    Ok(lines)
 }
 
 fn url_encode(s: &str) -> String {

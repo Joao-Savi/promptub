@@ -93,8 +93,14 @@ let trackSwitchInProgress = false;
 const streamCache = new Map();
 const PREWARM_AHEAD = 3;
 const VOLUME_STEP = 5;
+/** Antecipa letra sincronizada (~meio segundo) para acompanhar a voz. */
+const LYRICS_LEAD_SYNCED = 0.5;
 let lyricsSynced = true;
 let lyricsRescaled = false;
+let streamRecoverInProgress = false;
+let streamStallTimer = null;
+let lastAudioTime = 0;
+let lastAudioProgressAt = 0;
 
 function adjustVolume(delta) {
   if (!htmlAudio || !volumeSlider) return;
@@ -321,22 +327,23 @@ function rebuildLyricElements() {
 
 function findActiveLyricIndex(t) {
   if (!lyricLines.length) return -1;
+  const effective = lyricsSynced ? t + LYRICS_LEAD_SYNCED : t;
 
   if (lyricsSynced) {
-    if (t < lyricLines[0].start) return -1;
+    if (effective < lyricLines[0].start) return -1;
     for (let i = lyricLines.length - 1; i >= 0; i--) {
       const line = lyricLines[i];
       const next = lyricLines[i + 1];
-      if (t >= line.start && (!next || t < next.start)) {
+      if (effective >= line.start && (!next || effective < next.start)) {
         return i;
       }
     }
     return -1;
   }
 
-  if (!lyricsRescaled || t < lyricLines[0].start) return -1;
+  if (!lyricsRescaled || effective < lyricLines[0].start) return -1;
   for (let i = lyricLines.length - 1; i >= 0; i--) {
-    if (t >= lyricLines[i].start) return i;
+    if (effective >= lyricLines[i].start) return i;
   }
   return -1;
 }
@@ -403,6 +410,7 @@ function startLyricsSyncLoop() {
   if (lyricsSyncRaf) return;
   const tick = () => {
     syncLyricsHighlight();
+    watchPlaybackProgress();
     if (htmlAudio && !htmlAudio.paused && !htmlAudio.ended) {
       lyricsSyncRaf = requestAnimationFrame(tick);
     } else {
@@ -476,14 +484,68 @@ function showPlaylist() {
   panelPlaylist?.classList.remove("hidden");
 }
 
-async function resolveStreamUrl(video) {
-  if (streamCache.has(video.id)) return streamCache.get(video.id);
+async function resolveStreamUrl(video, force = false) {
+  if (!force && streamCache.has(video.id)) return streamCache.get(video.id);
   const url = await tauriInvoke("resolve_stream", {
     videoId: video.id,
     videoUrl: video.url || null,
+    force,
   });
   streamCache.set(video.id, url);
   return url;
+}
+
+async function recoverStream() {
+  if (!currentVideo || streamRecoverInProgress || !htmlAudio) return;
+  streamRecoverInProgress = true;
+  const pos = htmlAudio.currentTime || 0;
+  const wasPlaying = !htmlAudio.paused;
+  try {
+    streamCache.delete(currentVideo.id);
+    setStatus("reconectando stream...");
+    const url = await resolveStreamUrl(currentVideo, true);
+    htmlAudio.src = url;
+    htmlAudio.volume = Number(volumeSlider?.value ?? 100) / 100;
+    const seek = () => {
+      if (pos > 0 && Number.isFinite(pos)) {
+        htmlAudio.currentTime = Math.min(pos, htmlAudio.duration || pos);
+      }
+    };
+    if (htmlAudio.readyState >= 1) seek();
+    else htmlAudio.addEventListener("loadedmetadata", seek, { once: true });
+    if (wasPlaying) await htmlAudio.play();
+    lastAudioTime = htmlAudio.currentTime;
+    lastAudioProgressAt = Date.now();
+    setStatus("stream reconectado");
+  } catch (e) {
+    setStatus(`travou — ${String(e).slice(0, 80)}`);
+  } finally {
+    streamRecoverInProgress = false;
+  }
+}
+
+function scheduleStreamRecover() {
+  if (streamStallTimer) clearTimeout(streamStallTimer);
+  streamStallTimer = setTimeout(() => {
+    streamStallTimer = null;
+    if (!htmlAudio || htmlAudio.paused || htmlAudio.ended || !currentVideo) return;
+    void recoverStream();
+  }, 3500);
+}
+
+function watchPlaybackProgress() {
+  if (!htmlAudio || htmlAudio.paused || htmlAudio.ended) return;
+  const now = Date.now();
+  const t = htmlAudio.currentTime;
+  if (t > lastAudioTime + 0.05) {
+    lastAudioTime = t;
+    lastAudioProgressAt = now;
+    return;
+  }
+  if (now - lastAudioProgressAt > 9000) {
+    lastAudioProgressAt = now;
+    scheduleStreamRecover();
+  }
 }
 
 async function prewarmNextInQueue() {
@@ -507,6 +569,8 @@ async function streamAndPlay(video) {
   const url = await resolveStreamUrl(video);
   htmlAudio.src = url;
   htmlAudio.volume = Number(volumeSlider?.value ?? 100) / 100;
+  lastAudioTime = 0;
+  lastAudioProgressAt = Date.now();
   await htmlAudio.play();
   isPlaying = true;
   updatePlayButton();
@@ -1159,7 +1223,16 @@ function setupAudioPlayer() {
   htmlAudio.addEventListener("error", () => {
     isPlaying = false;
     updatePlayButton();
-    setStatus("Erro ao tocar stream — tente outra faixa");
+    if (currentVideo) void recoverStream();
+    else setStatus("Erro ao tocar stream — tente outra faixa");
+  });
+
+  htmlAudio.addEventListener("stalled", () => {
+    if (!htmlAudio.paused && !htmlAudio.ended) scheduleStreamRecover();
+  });
+
+  htmlAudio.addEventListener("waiting", () => {
+    if (!htmlAudio.paused && !htmlAudio.ended) scheduleStreamRecover();
   });
 
   progressSlider?.addEventListener("mousedown", () => {
