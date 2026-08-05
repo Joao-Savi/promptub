@@ -91,6 +91,35 @@ let karaokeMode = false;
 let lyricsSyncRaf = null;
 let trackSwitchInProgress = false;
 const streamCache = new Map();
+const STREAM_CACHE_MAX = 12;
+const STREAM_CACHE_TTL_MS = 20 * 60 * 1000;
+
+function pruneStreamCache() {
+  const now = Date.now();
+  for (const [id, entry] of streamCache) {
+    if (now - entry.at > STREAM_CACHE_TTL_MS) streamCache.delete(id);
+  }
+  while (streamCache.size > STREAM_CACHE_MAX) {
+    const oldest = streamCache.keys().next().value;
+    if (oldest === undefined) break;
+    streamCache.delete(oldest);
+  }
+}
+
+function streamCacheGet(id) {
+  const entry = streamCache.get(id);
+  if (!entry) return null;
+  if (Date.now() - entry.at > STREAM_CACHE_TTL_MS) {
+    streamCache.delete(id);
+    return null;
+  }
+  return entry.url;
+}
+
+function streamCacheSet(id, url) {
+  streamCache.set(id, { url, at: Date.now() });
+  pruneStreamCache();
+}
 const PREWARM_AHEAD = 3;
 const VOLUME_STEP = 5;
 /** Antecipa letra sincronizada (~meio segundo) para acompanhar a voz. */
@@ -485,13 +514,16 @@ function showPlaylist() {
 }
 
 async function resolveStreamUrl(video, force = false) {
-  if (!force && streamCache.has(video.id)) return streamCache.get(video.id);
+  if (!force) {
+    const cached = streamCacheGet(video.id);
+    if (cached) return cached;
+  }
   const url = await tauriInvoke("resolve_stream", {
     videoId: video.id,
     videoUrl: video.url || null,
     force,
   });
-  streamCache.set(video.id, url);
+  streamCacheSet(video.id, url);
   return url;
 }
 
@@ -555,7 +587,7 @@ async function prewarmNextInQueue() {
     if (!upcoming.length) return;
     await tauriInvoke("prewarm_playlist", { items: upcoming, audioOnly: true });
     for (const v of upcoming) {
-      if (!streamCache.has(v.id)) {
+      if (!streamCacheGet(v.id)) {
         resolveStreamUrl(v).catch(() => {});
       }
     }
@@ -844,7 +876,7 @@ async function prewarmFeedItems(items) {
   try {
     await tauriInvoke("prewarm_playlist", { items: batch, audioOnly: true });
     for (const v of batch) {
-      if (!streamCache.has(v.id)) resolveStreamUrl(v).catch(() => {});
+      if (!streamCacheGet(v.id)) resolveStreamUrl(v).catch(() => {});
     }
   } catch (_) {}
 }

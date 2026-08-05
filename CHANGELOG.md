@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.8] — 2026-08-05
+
+### Limpeza automatica de cache
+- **Antes:** stream_cache acumulava dezenas de URLs; temp de letras ficava no disco
+- **Agora:** max 16 URLs (20 min); limpeza ao abrir e a cada 30 min; temp promptub-* apos 1 h; feed 24 h
+
+---
+
 ## [0.5.7] — 2026-08-05
 
 ### Stream, letras e sync

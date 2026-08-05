@@ -1,3 +1,4 @@
+mod cache_cleanup;
 mod lyrics;
 mod auth;
 mod deps;
@@ -72,6 +73,8 @@ pub fn run() {
             move |app| {
                 init_tools(app.handle());
                 state.set_app_handle(app.handle().clone());
+                cache_cleanup::run_startup_cleanup(&state.stream_cache);
+                cache_cleanup::schedule_periodic_cleanup(state.stream_cache.clone());
                 auth::load_cookies(&state);
                 {
                     let history = state.watch_history.lock().clone();

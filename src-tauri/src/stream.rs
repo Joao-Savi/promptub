@@ -11,9 +11,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const CACHE_TTL: Duration = Duration::from_secs(25 * 60);
-const DISK_CACHE_TTL_SECS: u64 = 25 * 60;
-const DISK_CACHE_MAX: usize = 48;
+const CACHE_TTL: Duration = Duration::from_secs(20 * 60);
+const DISK_CACHE_TTL_SECS: u64 = 20 * 60;
+const DISK_CACHE_MAX: usize = 16;
 pub const PREWARM_AHEAD: usize = 3;
 
 struct CachedStream {
@@ -27,6 +27,7 @@ struct DiskStreamEntry {
     saved_at: u64,
 }
 
+#[derive(Clone)]
 pub struct StreamCache {
     entries: Arc<Mutex<HashMap<String, CachedStream>>>,
     prewarm_total: Arc<AtomicUsize>,
@@ -42,6 +43,12 @@ impl StreamCache {
         }
     }
 
+    pub fn prune_expired(&self) {
+        let mut map = self.entries.lock();
+        prune_map(&mut map);
+        save_disk_cache(&map);
+    }
+
     pub fn invalidate(&self, video_id: &str) {
         let mut map = self.entries.lock();
         map.remove(video_id);
@@ -49,12 +56,20 @@ impl StreamCache {
     }
 
     pub fn get(&self, video_id: &str) -> Option<String> {
-        let map = self.entries.lock();
-        let entry = map.get(video_id)?;
-        if entry.fetched.elapsed() > CACHE_TTL {
+        let mut map = self.entries.lock();
+        let expired = map
+            .get(video_id)
+            .map(|e| e.fetched.elapsed() > CACHE_TTL)
+            .unwrap_or(false);
+        if expired {
+            map.remove(video_id);
+            save_disk_cache(&map);
             return None;
         }
+        let entry = map.get(video_id)?;
         if !youtube::is_allowed_stream_url(&entry.url) {
+            map.remove(video_id);
+            save_disk_cache(&map);
             return None;
         }
         Some(entry.url.clone())
@@ -64,14 +79,16 @@ impl StreamCache {
         if !youtube::is_allowed_stream_url(&url) {
             return;
         }
-        self.entries.lock().insert(
+        let mut map = self.entries.lock();
+        map.insert(
             video_id,
             CachedStream {
-                url: url.clone(),
+                url,
                 fetched: Instant::now(),
             },
         );
-        save_disk_cache(&self.entries.lock());
+        prune_map(&mut map);
+        save_disk_cache(&map);
     }
 
     pub fn prewarm_status(&self) -> (usize, usize) {
@@ -99,14 +116,16 @@ impl StreamCache {
                     continue;
                 }
                 if let Ok(url) = resolve_stream_url(&cookies, track) {
-                    entries.lock().insert(
+                    let mut map = entries.lock();
+                    map.insert(
                         track.id.clone(),
                         CachedStream {
                             url,
                             fetched: Instant::now(),
                         },
                     );
-                    save_disk_cache(&entries.lock());
+                    prune_map(&mut map);
+                    save_disk_cache(&map);
                 }
                 prewarm_done.fetch_add(1, Ordering::Relaxed);
                 if i + 1 < batch.len() {
@@ -216,7 +235,30 @@ fn load_disk_cache() -> HashMap<String, CachedStream> {
             },
         );
     }
+    prune_map(&mut out);
     out
+}
+
+fn prune_map(map: &mut HashMap<String, CachedStream>) {
+    map.retain(|_, entry| {
+        entry.fetched.elapsed() <= CACHE_TTL && youtube::is_allowed_stream_url(&entry.url)
+    });
+    if map.len() <= DISK_CACHE_MAX {
+        return;
+    }
+    let mut ids: Vec<(String, Instant)> = map
+        .iter()
+        .map(|(id, e)| (id.clone(), e.fetched))
+        .collect();
+    ids.sort_by_key(|(_, t)| *t);
+    while map.len() > DISK_CACHE_MAX {
+        if let Some((id, _)) = ids.first() {
+            map.remove(id);
+            ids.remove(0);
+        } else {
+            break;
+        }
+    }
 }
 
 fn save_disk_cache(map: &HashMap<String, CachedStream>) {
@@ -243,6 +285,10 @@ fn save_disk_cache(map: &HashMap<String, CachedStream>) {
     entries.sort_by(|a, b| b.1.saved_at.cmp(&a.1.saved_at));
     entries.truncate(DISK_CACHE_MAX);
     let trimmed: HashMap<String, DiskStreamEntry> = entries.into_iter().collect();
+    if trimmed.is_empty() {
+        let _ = fs::remove_file(&path);
+        return;
+    }
     if let Ok(json) = serde_json::to_string(&trimmed) {
         let _ = fs::write(path, json);
     }

@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const FEED_CACHE_TTL_SECS: u64 = 36 * 3600;
+const FEED_CACHE_TTL_SECS: u64 = 24 * 3600;
 
 #[derive(Serialize, Deserialize)]
 struct FeedCacheFile {
