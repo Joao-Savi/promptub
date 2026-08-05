@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const LRCLIB_STRONG_SCORE: f64 = 0.75;
-const LRCLIB_MIN_SCORE: f64 = 0.65;
-const LRCLIB_WAIT: Duration = Duration::from_millis(3000);
+const LRCLIB_MIN_SCORE: f64 = 0.75;
+const LRCLIB_WAIT: Duration = Duration::from_millis(2500);
 
 struct PartialLyrics {
     lrclib: Option<(Vec<LyricLine>, f64)>,
@@ -74,7 +74,7 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
     let cookies = cookies.to_string();
     let id_owned = id.to_string();
     let h_yt = thread::spawn(move || {
-        if let Ok(lines) = fetch_youtube_subs(&cookies, &id_owned) {
+        if let Ok(lines) = fetch_youtube_manual_subs(&cookies, &id_owned) {
             if let Ok(clean) = sanitize_lyrics(lines) {
                 let mut guard = p_yt.lock().unwrap_or_else(|e| e.into_inner());
                 guard.youtube = Some(tag_source(clean, "youtube"));
@@ -108,12 +108,15 @@ fn pick_lyrics_result(
     lrclib: Option<(Vec<LyricLine>, f64)>,
     youtube: Option<Vec<LyricLine>>,
 ) -> Result<Vec<LyricLine>, String> {
-    match (lrclib, youtube) {
-        (Some((_lrc, score)), Some(yt)) if score < LRCLIB_STRONG_SCORE => Ok(yt),
-        (Some((lrc, score)), _) if score >= LRCLIB_MIN_SCORE => Ok(lrc),
-        (None, Some(yt)) => Ok(yt),
-        _ => Err("Letra sincronizada nao encontrada para esta faixa".into()),
+    if let Some((lrc, score)) = lrclib {
+        if score >= LRCLIB_MIN_SCORE {
+            return Ok(lrc);
+        }
     }
+    if let Some(yt) = youtube {
+        return Ok(yt);
+    }
+    Err("Letra sincronizada nao encontrada para esta faixa".into())
 }
 
 #[derive(Clone)]
@@ -180,34 +183,65 @@ fn strip_bracket_tags(s: &str) -> String {
 }
 
 fn fetch_lrclib_strict_scored(meta: &LyricsMeta) -> Result<(Vec<LyricLine>, f64), String> {
-    let mut best: Option<(f64, Vec<LyricLine>)> = None;
+    let best: Arc<Mutex<Option<(f64, Vec<LyricLine>)>>> = Arc::new(Mutex::new(None));
+    let mut handles = Vec::new();
 
     if !meta.artist.is_empty() {
         for track in [&meta.track_short, &meta.track_full] {
             if track.is_empty() {
                 continue;
             }
-            if let Ok((lines, score)) = lrclib_get_validated_scored(track, &meta.artist, meta) {
-                upsert_lrclib_best(&mut best, score, lines);
+            let best = Arc::clone(&best);
+            let meta = meta.clone();
+            let track = track.to_string();
+            let artist = meta.artist.clone();
+            handles.push(thread::spawn(move || {
+                if let Ok((lines, score)) = lrclib_get_validated_scored(&track, &artist, &meta) {
+                    let mut guard = best.lock().unwrap_or_else(|e| e.into_inner());
+                    upsert_lrclib_best(&mut guard, score, lines);
+                }
+            }));
+        }
+    }
+
+    for query in lrclib_search_queries(meta) {
+        let best = Arc::clone(&best);
+        let meta = meta.clone();
+        handles.push(thread::spawn(move || {
+            if let Ok((lines, score)) = lrclib_search_strict_scored(&query, &meta) {
+                let mut guard = best.lock().unwrap_or_else(|e| e.into_inner());
+                upsert_lrclib_best(&mut guard, score, lines);
             }
-        }
+        }));
     }
 
-    for query in [&meta.search_query, &format!("{} {}", meta.artist, meta.track_short)] {
-        if query.trim().is_empty() {
-            continue;
-        }
-        if let Ok((lines, score)) = lrclib_search_strict_scored(query, meta) {
-            upsert_lrclib_best(&mut best, score, lines);
-        }
+    for handle in handles {
+        handle.join().ok();
     }
 
+    let best = best.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some((score, lines)) = best {
         if score >= LRCLIB_MIN_SCORE {
             return Ok((lines, score));
         }
     }
     Err("Letra sincronizada nao encontrada".into())
+}
+
+fn lrclib_search_queries(meta: &LyricsMeta) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |q: &str| {
+        let q = q.trim();
+        if q.is_empty() || out.iter().any(|x| x == q) {
+            return;
+        }
+        out.push(q.to_string());
+    };
+    push(&meta.search_query);
+    push(&format!("{} {}", meta.artist, meta.track_short));
+    push(&meta.track_short);
+    push(&meta.track_full);
+    out
 }
 
 fn upsert_lrclib_best(best: &mut Option<(f64, Vec<LyricLine>)>, score: f64, lines: Vec<LyricLine>) {
@@ -281,7 +315,7 @@ fn lrclib_search_strict_scored(query: &str, meta: &LyricsMeta) -> Result<(Vec<Ly
 }
 
 fn lrclib_item_matches(item: &serde_json::Value, meta: &LyricsMeta) -> bool {
-    lrclib_match_score(item, meta) >= 0.60
+    lrclib_match_score(item, meta) >= LRCLIB_MIN_SCORE
 }
 
 fn lrclib_match_score(item: &serde_json::Value, meta: &LyricsMeta) -> f64 {
@@ -377,14 +411,22 @@ fn normalize_artist(s: &str) -> String {
         .to_string()
 }
 
-fn fetch_youtube_subs(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>, String> {
+fn fetch_youtube_manual_subs(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>, String> {
     if let Ok(lines) = download_subs_to_dir(cookies, video_id, false) {
         return Ok(lines);
     }
-    if let Ok(lines) = download_subs_to_dir(cookies, video_id, true) {
-        return Ok(lines);
-    }
-    download_subs_from_info(cookies, video_id)
+    download_subs_from_info_manual(cookies, video_id)
+}
+
+fn download_subs_from_info_manual(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>, String> {
+    let info = ytdlp_dump_json(cookies, video_id)?;
+    let sub_url = pick_sub_url_manual(&info).ok_or("Sem legenda manual no video")?;
+    let body = http_get(&sub_url)?;
+    parse_subtitle_text(&body, sub_url.contains("json3") || body.trim_start().starts_with('{'))
+}
+
+fn pick_sub_url_manual(info: &serde_json::Value) -> Option<String> {
+    pick_sub_url_from_key(info, "subtitles")
 }
 
 fn download_subs_to_dir(cookies: &str, video_id: &str, auto: bool) -> Result<Vec<LyricLine>, String> {
@@ -431,13 +473,6 @@ fn download_subs_to_dir(cookies: &str, video_id: &str, auto: bool) -> Result<Vec
     Err("Legendas do YouTube indisponiveis".into())
 }
 
-fn download_subs_from_info(cookies: &str, video_id: &str) -> Result<Vec<LyricLine>, String> {
-    let info = ytdlp_dump_json(cookies, video_id)?;
-    let sub_url = pick_sub_url(&info).ok_or("Sem URL de legenda")?;
-    let body = http_get(&sub_url)?;
-    parse_subtitle_text(&body, sub_url.contains("json3") || body.trim_start().starts_with('{'))
-}
-
 fn ytdlp_dump_json(cookies: &str, video_id: &str) -> Result<serde_json::Value, String> {
     let ytdlp = find_ytdlp().ok_or("yt-dlp nao encontrado")?;
     let url = format!("https://www.youtube.com/watch?v={video_id}");
@@ -459,13 +494,6 @@ fn ytdlp_dump_json(cookies: &str, video_id: &str) -> Result<serde_json::Value, S
         return Err(decode_bytes(&output.stderr));
     }
     serde_json::from_str(&decode_bytes(&output.stdout)).map_err(|e| e.to_string())
-}
-
-fn pick_sub_url(info: &serde_json::Value) -> Option<String> {
-    if let Some(url) = pick_sub_url_from_key(info, "subtitles") {
-        return Some(url);
-    }
-    pick_sub_url_from_key(info, "automatic_captions")
 }
 
 fn pick_sub_url_from_key(info: &serde_json::Value, key: &str) -> Option<String> {
@@ -981,24 +1009,34 @@ mod tests {
     }
 
     #[test]
-    fn prefers_youtube_on_borderline_lrclib() {
+    fn prefers_lrclib_when_strong() {
         let lrc = vec![LyricLine {
             start: 1.0,
             end: 2.0,
-            text: "test".into(),
+            text: "letra certa".into(),
             synced: true,
             source: "lrclib".into(),
         }];
         let yt = vec![LyricLine {
             start: 1.0,
             end: 2.0,
-            text: "video".into(),
+            text: "legenda manual".into(),
             synced: true,
             source: "youtube".into(),
         }];
-        let picked = pick_lyrics_result(Some((lrc.clone(), 0.7)), Some(yt.clone())).unwrap();
-        assert_eq!(picked[0].text, "video");
-        let picked_strong = pick_lyrics_result(Some((lrc, 0.8)), Some(yt)).unwrap();
-        assert_eq!(picked_strong[0].text, "test");
+        let picked = pick_lyrics_result(Some((lrc.clone(), 0.8)), Some(yt)).unwrap();
+        assert_eq!(picked[0].text, "letra certa");
+    }
+
+    #[test]
+    fn rejects_weak_lrclib_without_manual_subs() {
+        let weak = vec![LyricLine {
+            start: 1.0,
+            end: 2.0,
+            text: "match fraco".into(),
+            synced: true,
+            source: "lrclib".into(),
+        }];
+        assert!(pick_lyrics_result(Some((weak, 0.7)), None).is_err());
     }
 }

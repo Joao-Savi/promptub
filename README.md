@@ -115,7 +115,7 @@ promptub/
 
 ## Versão
 
-Versão atual: **0.5.12** — ver [CHANGELOG.md](CHANGELOG.md) e [VERSION.md](VERSION.md).
+Versão atual: **0.5.13** — ver [CHANGELOG.md](CHANGELOG.md) e [VERSION.md](VERSION.md).
 
 ---
 

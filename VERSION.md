@@ -18,10 +18,11 @@ SemVer: `MAJOR.MINOR.PATCH`
 - `README.md`
 - `index.html` (banner welcome)
 
-## Versão atual: **0.5.12**
+## Versão atual: **0.5.13**
 
 | Versão | Tipo | Resumo |
 |--------|------|--------|
+| **0.5.13** | PATCH | Sem auto-legenda; LRCLIB match forte; play nao espera letra |
 | **0.5.12** | PATCH | Prefetch letras; slider sync; YouTube se match fraco |
 | **0.5.11** | PATCH | Validacao artista+faixa; so letra sync real; busca paralela |
 | **0.5.10** | PATCH | Letras rapidas (LRCLIB primeiro); lag por fonte; cache |

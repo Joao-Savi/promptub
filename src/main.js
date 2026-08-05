@@ -125,7 +125,7 @@ const VOLUME_STEP = 5;
 const LYRICS_LAG = { lrclib: 0.18, youtube: 0.55, plain: 0 };
 const LYRICS_OFFSET_KEY = "promptub-lyrics-offset";
 const LYRICS_CACHE_MAX = 24;
-const LYRICS_CACHE_VER = 4;
+const LYRICS_CACHE_VER = 5;
 const lyricsCache = new Map();
 const lyricsPrefetching = new Set();
 let lyricsSource = "lrclib";
@@ -210,7 +210,7 @@ function updatePlayButton() {
   btnStop.title = isPlaying ? "Pausar" : "Tocar";
 }
 
-function updateNowPlaying(video) {
+function updateNowPlaying(video, loadLyrics = true) {
   lastVideoId = video.id;
   currentVideo = video;
   if (npTitle) npTitle.textContent = video.title;
@@ -218,7 +218,7 @@ function updateNowPlaying(video) {
     npThumb.src = thumbUrl(video);
     npThumb.classList.remove("hidden");
   }
-  scheduleLyricsLoad(video);
+  if (loadLyrics) scheduleLyricsLoad(video);
   void refreshTasteButtons();
 }
 
@@ -693,7 +693,7 @@ async function prewarmNextInQueue() {
 
 async function streamAndPlay(video) {
   if (!htmlAudio) throw new Error("Player de audio indisponivel");
-  updateNowPlaying(video);
+  updateNowPlaying(video, false);
   setStatus("resolvendo stream...");
   const url = await resolveStreamUrl(video);
   htmlAudio.src = url;
@@ -750,6 +750,7 @@ function createCard(v) {
   btnPlay.className = "btn-play";
   btnPlay.textContent = "[PLAY]";
   btnPlay.onclick = () => play(v, true);
+  btnPlay.onmouseenter = () => void prefetchLyrics(v);
   const btnQueue = document.createElement("button");
   btnQueue.className = "btn-queue";
   btnQueue.textContent = "[+Q]";
@@ -850,6 +851,7 @@ async function enqueue(video) {
     await tauriInvoke("enqueue", { video });
     setStatus("enqueued");
     refreshQueue();
+    void prefetchLyrics(video);
   } catch (e) {
     setStatus(`Erro: ${e}`);
   }
@@ -1243,7 +1245,10 @@ async function removeFromQueue(index) {
 async function playFromQueue(index) {
   try {
     const v = await tauriInvoke("play_queue_item", { index });
-    if (v) await streamAndPlay(v);
+    if (v) {
+      scheduleLyricsLoad(v);
+      await streamAndPlay(v);
+    }
   } catch (e) {
     setStatus(String(e));
   }
@@ -1254,8 +1259,10 @@ async function switchTrack(direction) {
   trackSwitchInProgress = true;
   try {
     const v = await tauriInvoke(direction === "next" ? "next" : "prev");
-    if (v) await streamAndPlay(v);
-    else if (direction === "next") {
+    if (v) {
+      scheduleLyricsLoad(v);
+      await streamAndPlay(v);
+    } else if (direction === "next") {
       isPlaying = false;
       updatePlayButton();
       setStatus("fim da fila");

@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.13] — 2026-08-05
+
+### Letras: so texto confiavel
+- **Antes:** legendas automaticas do YouTube geravam palavras erradas; LRCLIB fraco ou auto-legenda competiam
+- **Agora:** LRCLIB so com match ≥ 75%; YouTube so legenda manual; auto-legenda bloqueada; musica toca sem esperar letra
+
+---
+
 ## [0.5.12] — 2026-08-05
 
 ### Karaoke: precisao e velocidade
