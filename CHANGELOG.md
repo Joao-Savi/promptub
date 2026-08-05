@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.14] — 2026-08-05
+
+### Sync automatico de letras
+- **Antes:** LRC generico adiantava ou atrasava vs stream do YouTube
+- **Agora:** texto do LRCLIB + calibracao automatica pelo timing do video (auto-legenda so como referencia, nunca exibida)
+
+---
+
 ## [0.5.13] — 2026-08-05
 
 ### Letras: so texto confiavel

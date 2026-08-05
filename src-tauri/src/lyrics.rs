@@ -12,11 +12,12 @@ use std::time::{Duration, Instant};
 
 const LRCLIB_STRONG_SCORE: f64 = 0.75;
 const LRCLIB_MIN_SCORE: f64 = 0.75;
-const LRCLIB_WAIT: Duration = Duration::from_millis(2500);
+const LRCLIB_WAIT: Duration = Duration::from_millis(4000);
 
 struct PartialLyrics {
     lrclib: Option<(Vec<LyricLine>, f64)>,
     youtube: Option<Vec<LyricLine>>,
+    yt_auto: Option<Vec<LyricLine>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -57,6 +58,7 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
     let partial = Arc::new(Mutex::new(PartialLyrics {
         lrclib: None,
         youtube: None,
+        yt_auto: None,
     }));
 
     let p_lrclib = Arc::clone(&partial);
@@ -71,10 +73,10 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
     });
 
     let p_yt = Arc::clone(&partial);
-    let cookies = cookies.to_string();
-    let id_owned = id.to_string();
+    let cookies_yt = cookies.to_string();
+    let id_yt = id.to_string();
     let h_yt = thread::spawn(move || {
-        if let Ok(lines) = fetch_youtube_manual_subs(&cookies, &id_owned) {
+        if let Ok(lines) = fetch_youtube_manual_subs(&cookies_yt, &id_yt) {
             if let Ok(clean) = sanitize_lyrics(lines) {
                 let mut guard = p_yt.lock().unwrap_or_else(|e| e.into_inner());
                 guard.youtube = Some(tag_source(clean, "youtube"));
@@ -82,15 +84,26 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
         }
     });
 
+    let p_auto = Arc::clone(&partial);
+    let cookies_auto = cookies.to_string();
+    let id_auto = id.to_string();
+    let h_auto = thread::spawn(move || {
+        if let Some(probe) = fetch_youtube_auto_timing(&cookies_auto, &id_auto) {
+            let mut guard = p_auto.lock().unwrap_or_else(|e| e.into_inner());
+            guard.yt_auto = Some(probe);
+        }
+    });
+
     let started = Instant::now();
     while started.elapsed() < LRCLIB_WAIT {
         let guard = partial.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((lines, score)) = guard.lrclib.clone() {
-            if score >= LRCLIB_STRONG_SCORE {
-                return Ok(lines);
-            }
+        let lrclib_ready = guard.lrclib.is_some();
+        let auto_ready = guard.yt_auto.is_some();
+        let manual_ready = guard.youtube.is_some();
+        if lrclib_ready && auto_ready {
+            break;
         }
-        if guard.lrclib.is_some() && guard.youtube.is_some() {
+        if lrclib_ready && manual_ready && auto_ready {
             break;
         }
         drop(guard);
@@ -99,24 +112,127 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
 
     h_lrclib.join().ok();
     h_yt.join().ok();
+    h_auto.join().ok();
 
     let guard = partial.lock().unwrap_or_else(|e| e.into_inner());
-    pick_lyrics_result(guard.lrclib.clone(), guard.youtube.clone())
+    finalize_lyrics_result(&guard)
 }
 
-fn pick_lyrics_result(
-    lrclib: Option<(Vec<LyricLine>, f64)>,
-    youtube: Option<Vec<LyricLine>>,
-) -> Result<Vec<LyricLine>, String> {
-    if let Some((lrc, score)) = lrclib {
+fn finalize_lyrics_result(partial: &PartialLyrics) -> Result<Vec<LyricLine>, String> {
+    if let Some((mut lrc, score)) = partial.lrclib.clone() {
         if score >= LRCLIB_MIN_SCORE {
-            return Ok(lrc);
+            let calibrated = partial
+                .yt_auto
+                .as_ref()
+                .is_some_and(|probe| calibrate_lrclib_timing(&mut lrc, probe));
+            let source = if calibrated {
+                "lrclib-calibrated"
+            } else {
+                "lrclib"
+            };
+            return Ok(tag_source(lrc, source));
         }
     }
-    if let Some(yt) = youtube {
+    if let Some(yt) = partial.youtube.clone() {
         return Ok(yt);
     }
     Err("Letra sincronizada nao encontrada para esta faixa".into())
+}
+
+fn fetch_youtube_auto_timing(cookies: &str, video_id: &str) -> Option<Vec<LyricLine>> {
+    download_subs_to_dir(cookies, video_id, true)
+        .ok()
+        .map(timing_probe_lines)
+}
+
+fn timing_probe_lines(lines: Vec<LyricLine>) -> Vec<LyricLine> {
+    lines
+        .into_iter()
+        .filter(|l| {
+            let t = l.text.trim();
+            t.len() >= 2 && t.chars().filter(|c| c.is_alphabetic()).count() >= 2
+        })
+        .collect()
+}
+
+/// Alinha timestamps do LRC ao audio deste video usando auto-legenda so como referencia de tempo.
+fn calibrate_lrclib_timing(lrc: &mut [LyricLine], yt_probe: &[LyricLine]) -> bool {
+    if lrc.len() < 3 || yt_probe.len() < 6 {
+        return false;
+    }
+
+    let mut deltas = Vec::new();
+    for l_line in lrc.iter().take(24) {
+        let l_norm = normalize_lyric_text(&l_line.text);
+        if l_norm.len() < 4 {
+            continue;
+        }
+        let mut best: Option<(f64, f64)> = None;
+        for y_line in yt_probe {
+            let sim = lyric_text_similarity(&l_norm, &normalize_lyric_text(&y_line.text));
+            if sim < 0.42 {
+                continue;
+            }
+            let delta = y_line.start - l_line.start;
+            if delta.abs() > 12.0 {
+                continue;
+            }
+            match best {
+                None => best = Some((sim, delta)),
+                Some((s, d)) if sim > s + 0.02 => best = Some((sim, delta)),
+                Some((s, d)) if sim >= s - 0.02 && delta.abs() < d.abs() => best = Some((sim, delta)),
+                _ => {}
+            }
+        }
+        if let Some((sim, delta)) = best {
+            if sim >= 0.45 {
+                deltas.push(delta);
+            }
+        }
+    }
+
+    if deltas.len() < 3 {
+        return false;
+    }
+
+    deltas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = deltas[deltas.len() / 2];
+    if median.abs() < 0.04 {
+        return false;
+    }
+
+    for line in lrc.iter_mut() {
+        line.start = (line.start + median).max(0.0);
+        line.end = (line.end + median).max(line.start + 0.35);
+    }
+    finalize_line_ends(lrc);
+    true
+}
+
+fn normalize_lyric_text(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn lyric_text_similarity(a: &str, b: &str) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    if a == b {
+        return 1.0;
+    }
+    word_jaccard(a, b)
 }
 
 #[derive(Clone)]
@@ -1009,7 +1125,80 @@ mod tests {
     }
 
     #[test]
-    fn prefers_lrclib_when_strong() {
+    fn calibrates_lrclib_from_auto_probe() {
+        let mut lrc = vec![
+            LyricLine {
+                start: 60.0,
+                end: 63.0,
+                text: "de baixo da calcinha".into(),
+                synced: true,
+                source: "lrclib".into(),
+            },
+            LyricLine {
+                start: 63.0,
+                end: 66.0,
+                text: "de baixo da calcinha de renda".into(),
+                synced: true,
+                source: "lrclib".into(),
+            },
+            LyricLine {
+                start: 66.0,
+                end: 69.0,
+                text: "mais uma vez me rendi".into(),
+                synced: true,
+                source: "lrclib".into(),
+            },
+        ];
+        let probe = vec![
+            LyricLine {
+                start: 60.9,
+                end: 61.5,
+                text: "de baixo da calcinha".into(),
+                synced: true,
+                source: default_source(),
+            },
+            LyricLine {
+                start: 63.8,
+                end: 64.4,
+                text: "de baixo da calcinha de renda".into(),
+                synced: true,
+                source: default_source(),
+            },
+            LyricLine {
+                start: 66.0,
+                end: 66.6,
+                text: "mais uma vez me rendi".into(),
+                synced: true,
+                source: default_source(),
+            },
+            LyricLine {
+                start: 68.0,
+                end: 68.6,
+                text: "a sua calcinha de renda".into(),
+                synced: true,
+                source: default_source(),
+            },
+            LyricLine {
+                start: 70.0,
+                end: 70.6,
+                text: "mais uma noite que eu fiz".into(),
+                synced: true,
+                source: default_source(),
+            },
+            LyricLine {
+                start: 72.0,
+                end: 72.6,
+                text: "amor com problema".into(),
+                synced: true,
+                source: default_source(),
+            },
+        ];
+        assert!(calibrate_lrclib_timing(&mut lrc, &probe));
+        assert!((lrc[0].start - 60.9).abs() < 0.15);
+    }
+
+    #[test]
+    fn finalize_prefers_lrclib_over_manual() {
         let lrc = vec![LyricLine {
             start: 1.0,
             end: 2.0,
@@ -1024,12 +1213,17 @@ mod tests {
             synced: true,
             source: "youtube".into(),
         }];
-        let picked = pick_lyrics_result(Some((lrc.clone(), 0.8)), Some(yt)).unwrap();
+        let partial = PartialLyrics {
+            lrclib: Some((lrc.clone(), 0.8)),
+            youtube: Some(yt),
+            yt_auto: None,
+        };
+        let picked = finalize_lyrics_result(&partial).unwrap();
         assert_eq!(picked[0].text, "letra certa");
     }
 
     #[test]
-    fn rejects_weak_lrclib_without_manual_subs() {
+    fn finalize_rejects_weak_lrclib_without_manual() {
         let weak = vec![LyricLine {
             start: 1.0,
             end: 2.0,
@@ -1037,6 +1231,11 @@ mod tests {
             synced: true,
             source: "lrclib".into(),
         }];
-        assert!(pick_lyrics_result(Some((weak, 0.7)), None).is_err());
+        let partial = PartialLyrics {
+            lrclib: Some((weak, 0.7)),
+            youtube: None,
+            yt_auto: None,
+        };
+        assert!(finalize_lyrics_result(&partial).is_err());
     }
 }

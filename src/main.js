@@ -121,11 +121,16 @@ function streamCacheSet(id, url) {
 }
 const PREWARM_AHEAD = 3;
 const VOLUME_STEP = 5;
-/** Atraso fino por fonte — legendas YouTube costumam adiantar vs o audio. */
-const LYRICS_LAG = { lrclib: 0.18, youtube: 0.55, plain: 0 };
+/** Atraso fino por fonte — calibrado usa offset ja calculado no backend. */
+const LYRICS_LAG = {
+  lrclib: 0.15,
+  "lrclib-calibrated": 0.04,
+  youtube: 0.35,
+  plain: 0,
+};
 const LYRICS_OFFSET_KEY = "promptub-lyrics-offset";
 const LYRICS_CACHE_MAX = 24;
-const LYRICS_CACHE_VER = 5;
+const LYRICS_CACHE_VER = 6;
 const lyricsCache = new Map();
 const lyricsPrefetching = new Set();
 let lyricsSource = "lrclib";
