@@ -3,8 +3,11 @@ use crate::discover::extract_artist_label;
 use crate::text::decode_bytes;
 use crate::youtube::Video;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 #[derive(Clone, Serialize)]
 pub struct LyricLine {
@@ -41,32 +44,45 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
     }
 
     let meta = parse_lyrics_meta(title, artist);
+    let slot: Arc<Mutex<Option<Result<Vec<LyricLine>, String>>>> = Arc::new(Mutex::new(None));
 
-    // LRCLIB primeiro (~1 s); legendas YouTube so se faltar (yt-dlp e lento e adianta)
-    if let Ok(lines) = fetch_lrclib(&meta, true) {
-        if let Ok(clean) = sanitize_lyrics(lines) {
-            return Ok(tag_source(clean, "lrclib"));
+    let slot_lrclib = Arc::clone(&slot);
+    let meta_lrclib = meta.clone();
+    let h_lrclib = thread::spawn(move || {
+        if let Ok(lines) = fetch_lrclib_strict(&meta_lrclib) {
+            if let Ok(clean) = sanitize_lyrics(lines) {
+                let mut guard = slot_lrclib.lock().unwrap_or_else(|e| e.into_inner());
+                *guard = Some(Ok(tag_source(clean, "lrclib")));
+            }
         }
+    });
+
+    let slot_yt = Arc::clone(&slot);
+    let cookies = cookies.to_string();
+    let id_owned = id.to_string();
+    let h_yt = thread::spawn(move || {
+        if let Ok(lines) = fetch_youtube_subs(&cookies, &id_owned) {
+            if let Ok(clean) = sanitize_lyrics(lines) {
+                let mut guard = slot_yt.lock().unwrap_or_else(|e| e.into_inner());
+                if guard.is_none() {
+                    *guard = Some(Ok(tag_source(clean, "youtube")));
+                }
+            }
+        }
+    });
+
+    h_lrclib.join().ok();
+    if let Some(Ok(lines)) = slot.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return Ok(lines);
     }
 
-    if let Ok(lines) = fetch_lrclib(&meta, false) {
-        if let Ok(clean) = sanitize_lyrics(lines) {
-            let src = if clean.iter().all(|l| l.synced) {
-                "lrclib"
-            } else {
-                "plain"
-            };
-            return Ok(tag_source(clean, src));
-        }
-    }
-
-    if let Ok(lines) = fetch_youtube_subs(cookies, id) {
-        if let Ok(clean) = sanitize_lyrics(lines) {
-            return Ok(tag_source(clean, "youtube"));
-        }
-    }
-
-    Err("Letra nao encontrada para esta faixa".into())
+    h_yt.join().ok();
+    let result = slot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .unwrap_or(Err("Letra sincronizada nao encontrada para esta faixa".into()));
+    result
 }
 
 #[derive(Clone)]
@@ -132,180 +148,170 @@ fn strip_bracket_tags(s: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn fetch_lrclib(meta: &LyricsMeta, synced_only: bool) -> Result<Vec<LyricLine>, String> {
-    const NO_ARTIST: &str = "";
-    let pairs = [
-        (&meta.track_short, meta.artist.as_str()),
-        (&meta.track_full, meta.artist.as_str()),
-        (&meta.track_short, NO_ARTIST),
-        (&meta.track_full, NO_ARTIST),
-    ];
-
-    for (track, artist) in pairs {
-        if track.is_empty() {
-            continue;
-        }
-        if let Ok(lines) = lrclib_get(track, artist, synced_only) {
-            return Ok(lines);
+fn fetch_lrclib_strict(meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
+    if !meta.artist.is_empty() {
+        for track in [&meta.track_short, &meta.track_full] {
+            if track.is_empty() {
+                continue;
+            }
+            if let Ok(lines) = lrclib_get_validated(track, &meta.artist, meta) {
+                return Ok(lines);
+            }
         }
     }
 
-    for query in [
-        &meta.search_query,
-        &format!("{} {}", meta.artist, meta.track_short),
-        &meta.track_short,
-        &meta.track_full,
-    ] {
+    for query in [&meta.search_query, &format!("{} {}", meta.artist, meta.track_short)] {
         if query.trim().is_empty() {
             continue;
         }
-        if let Ok(lines) = lrclib_search(query, &meta.artist, synced_only) {
+        if let Ok(lines) = lrclib_search_strict(query, meta) {
             return Ok(lines);
         }
     }
 
-    Err(if synced_only {
-        "Letra sincronizada nao encontrada".into()
-    } else {
-        "Letra nao encontrada".into()
-    })
+    Err("Letra sincronizada nao encontrada".into())
 }
 
-fn lrclib_get(track: &str, artist: &str, synced_only: bool) -> Result<Vec<LyricLine>, String> {
-    let url = if artist.trim().is_empty() {
-        format!(
-            "https://lrclib.net/api/get?track_name={}",
-            url_encode(track)
-        )
-    } else {
-        format!(
-            "https://lrclib.net/api/get?track_name={}&artist_name={}",
-            url_encode(track),
-            url_encode(artist)
-        )
-    };
-    let body = http_get(&url)?;
-    parse_lrclib_response(&body, artist, synced_only)
-}
-
-fn lrclib_search(query: &str, prefer_artist: &str, synced_only: bool) -> Result<Vec<LyricLine>, String> {
+fn lrclib_get_validated(track: &str, artist: &str, meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
     let url = format!(
-        "https://lrclib.net/api/search?q={}",
-        url_encode(query.trim())
+        "https://lrclib.net/api/get?track_name={}&artist_name={}",
+        url_encode(track),
+        url_encode(artist)
     );
     let body = http_get(&url)?;
-    let raw = body;
-    let results: Vec<serde_json::Value> =
-        serde_json::from_str(&raw).map_err(|e| format!("LRCLIB search invalido: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
 
-    let mut fallback: Option<String> = None;
-    let mut plain_fallback: Option<String> = None;
-    for item in results {
-        if let Some(lrc) = item.get("syncedLyrics").and_then(|x| x.as_str()) {
-            if !lrc.trim().is_empty() {
-                let item_artist = item
-                    .get("artistName")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("");
-                if !prefer_artist.is_empty() && artists_match(item_artist, prefer_artist) {
-                    return parse_lrc(lrc);
-                }
-                if fallback.is_none() {
-                    fallback = Some(lrc.to_string());
-                }
-            }
-        }
-        if plain_fallback.is_none() {
-            if let Some(plain) = item.get("plainLyrics").and_then(|x| x.as_str()) {
-                if !plain.trim().is_empty() {
-                    plain_fallback = Some(plain.to_string());
-                }
-            }
-        }
+    if v.get("syncedLyrics").is_none() {
+        return Err("LRCLIB get miss".into());
     }
-
-    if let Some(lrc) = fallback {
-        return parse_lrc(&lrc);
-    }
-    if !synced_only {
-        if let Some(plain) = plain_fallback {
-            return Ok(plain_to_lines(&plain));
-        }
-    }
-    Err("LRCLIB sem letra".into())
-}
-
-fn parse_lrclib_response(raw: &str, prefer_artist: &str, synced_only: bool) -> Result<Vec<LyricLine>, String> {
-    let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
-    if let Some(arr) = v.as_array() {
-        return lrclib_search_result(arr, prefer_artist, synced_only);
+    if !lrclib_item_matches(&v, meta) {
+        return Err("LRCLIB get: faixa nao confere".into());
     }
     if let Some(lrc) = v.get("syncedLyrics").and_then(|x| x.as_str()) {
         if !lrc.trim().is_empty() {
             return parse_lrc(lrc);
         }
     }
-    if !synced_only {
-        if let Some(plain) = v.get("plainLyrics").and_then(|x| x.as_str()) {
-            if !plain.trim().is_empty() {
-                return Ok(plain_to_lines(plain));
-            }
-        }
-    }
-    Err("LRCLIB resposta sem letra".into())
+    Err("LRCLIB get sem sync".into())
 }
 
-fn plain_to_lines(text: &str) -> Vec<LyricLine> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .enumerate()
-        .map(|(i, line)| LyricLine {
-            start: i as f64 * 3.0,
-            end: (i + 1) as f64 * 3.0,
-            text: line.to_string(),
-            synced: false,
-            source: default_source(),
-        })
-        .collect()
+fn lrclib_search_strict(query: &str, meta: &LyricsMeta) -> Result<Vec<LyricLine>, String> {
+    let url = format!(
+        "https://lrclib.net/api/search?q={}",
+        url_encode(query.trim())
+    );
+    let body = http_get(&url)?;
+    let results: Vec<serde_json::Value> =
+        serde_json::from_str(&body).map_err(|e| format!("LRCLIB search invalido: {e}"))?;
+
+    let mut best: Option<(f64, String)> = None;
+    for item in results {
+        if !lrclib_item_matches(&item, meta) {
+            continue;
+        }
+        let Some(lrc) = item.get("syncedLyrics").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        if lrc.trim().is_empty() {
+            continue;
+        }
+        let score = lrclib_match_score(&item, meta);
+        match &best {
+            None => best = Some((score, lrc.to_string())),
+            Some((prev, _)) if score > *prev => best = Some((score, lrc.to_string())),
+            _ => {}
+        }
+    }
+
+    if let Some((score, lrc)) = best {
+        if score >= 0.65 {
+            return parse_lrc(&lrc);
+        }
+    }
+    Err("LRCLIB search sem match".into())
 }
 
-fn lrclib_search_result(items: &[serde_json::Value], prefer_artist: &str, synced_only: bool) -> Result<Vec<LyricLine>, String> {
-    let mut fallback: Option<&str> = None;
-    let mut plain_fallback: Option<&str> = None;
-    for item in items {
-        if let Some(lrc) = item.get("syncedLyrics").and_then(|x| x.as_str()) {
-            if lrc.trim().is_empty() {
-                continue;
-            }
-            let item_artist = item
-                .get("artistName")
-                .and_then(|x| x.as_str())
-                .unwrap_or("");
-            if !prefer_artist.is_empty() && artists_match(item_artist, prefer_artist) {
-                return parse_lrc(lrc);
-            }
-            if fallback.is_none() {
-                fallback = Some(lrc);
-            }
-        }
-        if plain_fallback.is_none() {
-            if let Some(plain) = item.get("plainLyrics").and_then(|x| x.as_str()) {
-                if !plain.trim().is_empty() {
-                    plain_fallback = Some(plain);
-                }
-            }
-        }
+fn lrclib_item_matches(item: &serde_json::Value, meta: &LyricsMeta) -> bool {
+    lrclib_match_score(item, meta) >= 0.60
+}
+
+fn lrclib_match_score(item: &serde_json::Value, meta: &LyricsMeta) -> f64 {
+    let item_artist = item
+        .get("artistName")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    let item_track = item
+        .get("trackName")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if item_track.is_empty() {
+        return 0.0;
     }
-    if let Some(lrc) = fallback {
-        return parse_lrc(lrc);
+
+    let track_score = track_match_score(&meta.track_short, item_track)
+        .max(track_match_score(&meta.track_full, item_track));
+    if track_score < 0.5 {
+        return 0.0;
     }
-    if !synced_only {
-        if let Some(plain) = plain_fallback {
-            return Ok(plain_to_lines(plain));
-        }
+
+    if meta.artist.is_empty() {
+        return if track_score >= 0.85 {
+            track_score
+        } else {
+            0.0
+        };
     }
-    Err("LRCLIB array vazio".into())
+    if !artists_match(item_artist, &meta.artist) {
+        return 0.0;
+    }
+    (track_score + 1.0) / 2.0
+}
+
+fn track_match_score(expected: &str, found: &str) -> f64 {
+    let e = normalize_track(expected);
+    let f = normalize_track(found);
+    if e.is_empty() || f.is_empty() {
+        return 0.0;
+    }
+    if e == f {
+        return 1.0;
+    }
+    if e.len() >= 5 && f.len() >= 5 && (e.contains(&f) || f.contains(&e)) {
+        return 0.85;
+    }
+    word_jaccard(&e, &f)
+}
+
+fn normalize_track(s: &str) -> String {
+    s.to_lowercase()
+        .replace('&', "e")
+        .replace('(', " ")
+        .replace(')', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn word_jaccard(a: &str, b: &str) -> f64 {
+    const STOP: &[&str] = &[
+        "de", "da", "do", "e", "o", "a", "os", "as", "em", "na", "no", "um", "uma", "the", "of",
+    ];
+    let words_a: HashSet<String> = a
+        .split_whitespace()
+        .filter(|w| w.len() > 2 && !STOP.contains(w))
+        .map(|w| w.to_string())
+        .collect();
+    let words_b: HashSet<String> = b
+        .split_whitespace()
+        .filter(|w| w.len() > 2 && !STOP.contains(w))
+        .map(|w| w.to_string())
+        .collect();
+    if words_a.is_empty() || words_b.is_empty() {
+        return 0.0;
+    }
+    let inter = words_a.intersection(&words_b).count();
+    let union = words_a.union(&words_b).count();
+    inter as f64 / union as f64
 }
 
 fn artists_match(a: &str, b: &str) -> bool {
@@ -798,6 +804,16 @@ fn sanitize_lyrics(mut lines: Vec<LyricLine>) -> Result<Vec<LyricLine>, String> 
     if lines.len() < 4 {
         return Err("Letra insuficiente apos filtro".into());
     }
+    let substantive = lines
+        .iter()
+        .filter(|l| {
+            let t = l.text.trim();
+            t.len() >= 3 && t.chars().filter(|c| c.is_alphabetic()).count() >= 2
+        })
+        .count();
+    if substantive < 4 || substantive * 100 / lines.len() < 60 {
+        return Err("Legenda sem conteudo cantavel".into());
+    }
     finalize_line_ends(&mut lines);
     Ok(lines)
 }
@@ -863,5 +879,55 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!((lines[0].start - 6.05).abs() < 0.01);
         assert!(lines[0].text.contains("Despertador"));
+    }
+
+    #[test]
+    fn rejects_wrong_lrclib_track() {
+        let meta = parse_lyrics_meta(
+            "Gusttavo Lima - Que Mal Te Fiz Eu (Diz-Me)",
+            "Gusttavo Lima",
+        );
+        let wrong = serde_json::json!({
+            "artistName": "Gusttavo Lima",
+            "trackName": "Deixa Ser",
+            "syncedLyrics": "[00:01.00] E a guitarra soa"
+        });
+        assert!(!lrclib_item_matches(&wrong, &meta));
+    }
+
+    #[test]
+    fn accepts_matching_lrclib_track() {
+        let meta = parse_lyrics_meta(
+            "Gusttavo Lima - Que Mal Te Fiz Eu (Diz-Me)",
+            "Gusttavo Lima",
+        );
+        let ok = serde_json::json!({
+            "artistName": "Gusttavo Lima",
+            "trackName": "Que Mal Te Fiz Eu",
+            "syncedLyrics": "[00:01.00] test"
+        });
+        assert!(lrclib_item_matches(&ok, &meta));
+    }
+
+    #[test]
+    fn rejects_loose_track_without_artist() {
+        let meta = parse_lyrics_meta("Deixa Ser", "");
+        let item = serde_json::json!({
+            "artistName": "Outro",
+            "trackName": "Que Mal Te Fiz Eu",
+            "syncedLyrics": "[00:01.00] test"
+        });
+        assert!(!lrclib_item_matches(&item, &meta));
+    }
+
+    #[test]
+    fn accepts_exact_track_without_artist() {
+        let meta = parse_lyrics_meta("Deixa Ser", "");
+        let item = serde_json::json!({
+            "artistName": "Outro",
+            "trackName": "Deixa Ser",
+            "syncedLyrics": "[00:01.00] test"
+        });
+        assert!(lrclib_item_matches(&item, &meta));
     }
 }

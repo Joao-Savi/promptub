@@ -18,10 +18,11 @@ SemVer: `MAJOR.MINOR.PATCH`
 - `README.md`
 - `index.html` (banner welcome)
 
-## Versão atual: **0.5.10**
+## Versão atual: **0.5.11**
 
 | Versão | Tipo | Resumo |
 |--------|------|--------|
+| **0.5.11** | PATCH | Validacao artista+faixa; so letra sync real; busca paralela |
 | **0.5.10** | PATCH | Letras rapidas (LRCLIB primeiro); lag por fonte; cache |
 | **0.5.9** | PATCH | Fix loop de reconexao; sync letra sem adiantar |
 | **0.5.8** | PATCH | Limpeza automatica de cache (disco e temp) |

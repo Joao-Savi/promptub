@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.11] — 2026-08-05
+
+### Letras: validacao e karaoke confiavel
+- **Antes:** LRCLIB devolvia a 1ª letra da busca (musica errada); letra plain estimada
+- **Agora:** confere artista+faixa (score ≥ 0,65); so letra sincronizada real; LRCLIB e YouTube em paralelo; rejeita legendas vazias/lixo
+
+---
+
 ## [0.5.10] — 2026-08-05
 
 ### Letras: velocidade e sync

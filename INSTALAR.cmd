@@ -2,7 +2,7 @@
 title Instalar promptub
 cd /d "%~dp0"
 
-set "WANT=0.5.10"
+set "WANT=0.5.11"
 set "SETUP="
 
 if exist "bin\promptub_%WANT%_x64-setup.exe" (

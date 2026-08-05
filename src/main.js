@@ -124,6 +124,7 @@ const VOLUME_STEP = 5;
 /** Atraso fino por fonte — legendas YouTube costumam adiantar vs o audio. */
 const LYRICS_LAG = { lrclib: 0.18, youtube: 0.55, plain: 0 };
 const LYRICS_CACHE_MAX = 24;
+const LYRICS_CACHE_VER = 3;
 const lyricsCache = new Map();
 let lyricsSource = "lrclib";
 let lyricsSynced = true;
@@ -241,6 +242,29 @@ async function refreshTasteButtons() {
   }
 }
 
+function showNoLyrics(message = "sem letra sincronizada para esta faixa") {
+  lyricLines = [];
+  lyricLineEls = [];
+  lastLyricIdx = -1;
+  lyricsSynced = false;
+  const scroll = $("lyrics-scroll");
+  if (!scroll) return;
+  scroll.replaceChildren();
+  const p = document.createElement("p");
+  p.className = "lyrics-placeholder muted";
+  p.textContent = message;
+  scroll.appendChild(p);
+}
+
+function isSyncedLyrics(lines) {
+  return (
+    Array.isArray(lines) &&
+    lines.length > 0 &&
+    lines.every((l) => l.synced !== false) &&
+    !isPlainLyricsTiming(lines)
+  );
+}
+
 function detectLyricsSource(lines) {
   if (!lines?.length) return "lrclib";
   const tagged = lines.find((l) => l.source)?.source;
@@ -267,7 +291,7 @@ function scheduleLyricsLoad(video) {
   if (trackLabel) trackLabel.textContent = video.title;
 
   const cached = lyricsCache.get(video.id);
-  if (cached) {
+  if (cached?.ver === LYRICS_CACHE_VER) {
     lyricsSource = cached.source;
     renderLyrics(cached.lines);
     return;
@@ -307,7 +331,7 @@ async function loadLyrics(video) {
   if (!scroll || !video?.id) return;
 
   const cached = lyricsCache.get(video.id);
-  if (cached) {
+  if (cached?.ver === LYRICS_CACHE_VER) {
     lyricsSource = cached.source;
     renderLyrics(cached.lines);
     return;
@@ -328,17 +352,22 @@ async function loadLyrics(video) {
       artist: video.uploader || "",
     });
     if (token !== lyricsLoadToken) return;
+    if (!isSyncedLyrics(lines)) {
+      showNoLyrics();
+      return;
+    }
     lyricsSource = detectLyricsSource(lines);
-    lyricsCache.set(video.id, { lines, source: lyricsSource, at: Date.now() });
+    lyricsCache.set(video.id, {
+      lines,
+      source: lyricsSource,
+      at: Date.now(),
+      ver: LYRICS_CACHE_VER,
+    });
     pruneLyricsCache();
     renderLyrics(lines);
   } catch {
     if (token !== lyricsLoadToken) return;
-    scroll.replaceChildren();
-    const p = document.createElement("p");
-    p.className = "lyrics-placeholder muted";
-    p.textContent = "sem letra sincronizada";
-    scroll.appendChild(p);
+    showNoLyrics();
   } finally {
     if (token === lyricsLoadToken) lyricsLoading = false;
   }
@@ -427,25 +456,16 @@ function findActiveLyricIndex(t) {
 }
 
 function renderLyrics(lines) {
-  lyricsSource = detectLyricsSource(lines);
-  lyricsSynced = lines.length > 0 && lines.every((l) => l.synced !== false) && !isPlainLyricsTiming(lines);
-  lyricsRescaled = false;
-
-  if (!lyricsSynced && htmlAudio?.duration) {
-    lines = rescaleLyricsToDuration(lines, htmlAudio.duration);
-    lyricsRescaled = true;
-  }
-  const scroll = $("lyrics-scroll");
-  if (!scroll || !Array.isArray(lines) || !lines.length) {
-    if (scroll) {
-      scroll.replaceChildren();
-      const p = document.createElement("p");
-      p.className = "lyrics-placeholder muted";
-      p.textContent = "sem letra sincronizada";
-      scroll.appendChild(p);
-    }
+  if (!isSyncedLyrics(lines)) {
+    showNoLyrics();
     return;
   }
+  lyricsSource = detectLyricsSource(lines);
+  lyricsSynced = true;
+  lyricsRescaled = false;
+
+  const scroll = $("lyrics-scroll");
+  if (!scroll) return;
 
   scroll.replaceChildren();
   lyricLines = lines;
