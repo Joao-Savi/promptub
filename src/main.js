@@ -86,7 +86,6 @@ let lyricLines = [];
 let lyricLineEls = [];
 let lastLyricIdx = -1;
 let lyricsLoadToken = 0;
-let lyricsDelayTimer = null;
 let karaokeMode = false;
 let lyricsSyncRaf = null;
 let trackSwitchInProgress = false;
@@ -122,9 +121,14 @@ function streamCacheSet(id, url) {
 }
 const PREWARM_AHEAD = 3;
 const VOLUME_STEP = 5;
-/** Pequeno ajuste fino; 0 = timestamp exato do LRC/legenda. */
-const LYRICS_LEAD_SYNCED = 0;
+/** Atraso fino por fonte — legendas YouTube costumam adiantar vs o audio. */
+const LYRICS_LAG = { lrclib: 0.18, youtube: 0.55, plain: 0 };
+const LYRICS_CACHE_MAX = 24;
+const lyricsCache = new Map();
+let lyricsSource = "lrclib";
 let lyricsSynced = true;
+let lyricsLoading = false;
+let lyricsFetchVideoId = null;
 let lyricsRescaled = false;
 let streamRecoverInProgress = false;
 let streamStallTimer = null;
@@ -237,21 +241,46 @@ async function refreshTasteButtons() {
   }
 }
 
+function detectLyricsSource(lines) {
+  if (!lines?.length) return "lrclib";
+  const tagged = lines.find((l) => l.source)?.source;
+  if (tagged) return tagged;
+  return lines.every((l) => l.synced !== false) ? "lrclib" : "plain";
+}
+
+function pruneLyricsCache() {
+  if (lyricsCache.size <= LYRICS_CACHE_MAX) return;
+  const oldest = [...lyricsCache.entries()].sort((a, b) => a[1].at - b[1].at);
+  while (lyricsCache.size > LYRICS_CACHE_MAX && oldest.length) {
+    const [id] = oldest.shift();
+    lyricsCache.delete(id);
+  }
+}
+
 function scheduleLyricsLoad(video) {
-  if (lyricsDelayTimer) clearTimeout(lyricsDelayTimer);
+  if (!video?.id) return;
+  if (lyricsFetchVideoId === video.id && (lyricLines.length || lyricsLoading)) return;
+
+  lyricsFetchVideoId = video.id;
   const scroll = $("lyrics-scroll");
   const trackLabel = $("lyrics-track");
   if (trackLabel) trackLabel.textContent = video.title;
+
+  const cached = lyricsCache.get(video.id);
+  if (cached) {
+    lyricsSource = cached.source;
+    renderLyrics(cached.lines);
+    return;
+  }
+
   if (scroll) {
     scroll.replaceChildren();
     const p = document.createElement("p");
     p.className = "lyrics-placeholder muted";
-    p.textContent = "letra em breve…";
+    p.textContent = "buscando letra...";
     scroll.appendChild(p);
   }
-  lyricsDelayTimer = setTimeout(() => {
-    void loadLyrics(video);
-  }, 600);
+  void loadLyrics(video);
 }
 
 function setKaraokeMode(on) {
@@ -275,19 +304,22 @@ function toggleKaraoke() {
 async function loadLyrics(video) {
   const scroll = $("lyrics-scroll");
   const trackLabel = $("lyrics-track");
-  if (!scroll) return;
+  if (!scroll || !video?.id) return;
+
+  const cached = lyricsCache.get(video.id);
+  if (cached) {
+    lyricsSource = cached.source;
+    renderLyrics(cached.lines);
+    return;
+  }
 
   const token = ++lyricsLoadToken;
+  lyricsLoading = true;
   lyricLines = [];
   lyricLineEls = [];
   lastLyricIdx = -1;
 
   if (trackLabel) trackLabel.textContent = video.title;
-  scroll.replaceChildren();
-  const loading = document.createElement("p");
-  loading.className = "lyrics-placeholder muted";
-  loading.textContent = "buscando letra...";
-  scroll.appendChild(loading);
 
   try {
     const lines = await tauriInvoke("fetch_lyrics", {
@@ -296,6 +328,9 @@ async function loadLyrics(video) {
       artist: video.uploader || "",
     });
     if (token !== lyricsLoadToken) return;
+    lyricsSource = detectLyricsSource(lines);
+    lyricsCache.set(video.id, { lines, source: lyricsSource, at: Date.now() });
+    pruneLyricsCache();
     renderLyrics(lines);
   } catch {
     if (token !== lyricsLoadToken) return;
@@ -304,6 +339,8 @@ async function loadLyrics(video) {
     p.className = "lyrics-placeholder muted";
     p.textContent = "sem letra sincronizada";
     scroll.appendChild(p);
+  } finally {
+    if (token === lyricsLoadToken) lyricsLoading = false;
   }
 }
 
@@ -360,9 +397,15 @@ function rebuildLyricElements() {
   });
 }
 
+function lyricsEffectiveTime(t) {
+  if (!lyricsSynced) return t;
+  const lag = LYRICS_LAG[lyricsSource] ?? 0.2;
+  return Math.max(0, t - lag);
+}
+
 function findActiveLyricIndex(t) {
   if (!lyricLines.length) return -1;
-  const effective = lyricsSynced ? t + LYRICS_LEAD_SYNCED : t;
+  const effective = lyricsEffectiveTime(t);
 
   if (lyricsSynced) {
     if (effective < lyricLines[0].start) return -1;
@@ -384,6 +427,7 @@ function findActiveLyricIndex(t) {
 }
 
 function renderLyrics(lines) {
+  lyricsSource = detectLyricsSource(lines);
   lyricsSynced = lines.length > 0 && lines.every((l) => l.synced !== false) && !isPlainLyricsTiming(lines);
   lyricsRescaled = false;
 
@@ -646,6 +690,7 @@ async function streamAndPlay(video) {
 }
 
 async function play(video, setQueue) {
+  scheduleLyricsLoad(video);
   try {
     await tauriInvoke("play", { video, setQueue, audioOnly: true });
     await streamAndPlay(video);

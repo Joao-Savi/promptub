@@ -14,10 +14,24 @@ pub struct LyricLine {
     /// Timestamps reais (LRC/legendas). False = estimativa, nao usar lead agressivo.
     #[serde(default = "default_synced")]
     pub synced: bool,
+    /// Origem: lrclib, youtube ou plain — frontend aplica lag fino por fonte.
+    #[serde(default = "default_source")]
+    pub source: String,
 }
 
 fn default_synced() -> bool {
     true
+}
+
+fn default_source() -> String {
+    "lrclib".into()
+}
+
+fn tag_source(mut lines: Vec<LyricLine>, source: &str) -> Vec<LyricLine> {
+    for line in &mut lines {
+        line.source = source.to_string();
+    }
+    lines
 }
 
 pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -> Result<Vec<LyricLine>, String> {
@@ -28,21 +42,28 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
 
     let meta = parse_lyrics_meta(title, artist);
 
-    // Legendas deste video primeiro (sync com o audio); LRCLIB como fallback limpo
-    if let Ok(lines) = fetch_youtube_subs(cookies, id) {
-        if let Ok(clean) = sanitize_lyrics(lines) {
-            return Ok(clean);
-        }
-    }
-
+    // LRCLIB primeiro (~1 s); legendas YouTube so se faltar (yt-dlp e lento e adianta)
     if let Ok(lines) = fetch_lrclib(&meta, true) {
         if let Ok(clean) = sanitize_lyrics(lines) {
-            return Ok(clean);
+            return Ok(tag_source(clean, "lrclib"));
         }
     }
 
     if let Ok(lines) = fetch_lrclib(&meta, false) {
-        return sanitize_lyrics(lines);
+        if let Ok(clean) = sanitize_lyrics(lines) {
+            let src = if clean.iter().all(|l| l.synced) {
+                "lrclib"
+            } else {
+                "plain"
+            };
+            return Ok(tag_source(clean, src));
+        }
+    }
+
+    if let Ok(lines) = fetch_youtube_subs(cookies, id) {
+        if let Ok(clean) = sanitize_lyrics(lines) {
+            return Ok(tag_source(clean, "youtube"));
+        }
     }
 
     Err("Letra nao encontrada para esta faixa".into())
@@ -244,6 +265,7 @@ fn plain_to_lines(text: &str) -> Vec<LyricLine> {
             end: (i + 1) as f64 * 3.0,
             text: line.to_string(),
             synced: false,
+            source: default_source(),
         })
         .collect()
 }
@@ -531,7 +553,7 @@ fn parse_json3(raw: &str) -> Result<Vec<LyricLine>, String> {
 
         let start = start_ms as f64 / 1000.0;
         let end = ((start_ms + dur_ms.max(500)) as f64) / 1000.0;
-        lines.push(LyricLine { start, end, text, synced: true });
+        lines.push(LyricLine { start, end, text, synced: true, source: default_source() });
     }
 
     finalize_line_ends(&mut lines);
@@ -567,7 +589,7 @@ fn parse_vtt(raw: &str) -> Result<Vec<LyricLine>, String> {
                 }
                 let text = clean_caption_text(&text);
                 if !text.is_empty() && !is_junk_lyric_line(&text) {
-                    lines.push(LyricLine { start, end, text, synced: true });
+                    lines.push(LyricLine { start, end, text, synced: true, source: default_source() });
                 }
                 continue;
             }
@@ -597,7 +619,7 @@ fn parse_srt(raw: &str) -> Result<Vec<LyricLine>, String> {
             .join(" ");
         let text = clean_caption_text(&text);
         if !text.is_empty() && !is_junk_lyric_line(&text) {
-            lines.push(LyricLine { start, end, text, synced: true });
+            lines.push(LyricLine { start, end, text, synced: true, source: default_source() });
         }
     }
     finalize_line_ends(&mut lines);
@@ -630,6 +652,7 @@ fn parse_lrc(raw: &str) -> Result<Vec<LyricLine>, String> {
                         end: start + 4.0,
                         text,
                         synced: true,
+                        source: default_source(),
                     });
                     break;
                 }

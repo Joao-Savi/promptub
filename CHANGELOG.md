@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.10] — 2026-08-05
+
+### Letras: velocidade e sync
+- **Antes:** yt-dlp baixava legendas YouTube primeiro (15–30 s); letra adiantada vs audio
+- **Agora:** LRCLIB primeiro (~1 s); cache local; busca ao dar play; lag fino por fonte (YouTube −0,55 s)
+
+---
+
 ## [0.5.9] — 2026-08-05
 
 ### Stream e sync de letras
