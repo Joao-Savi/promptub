@@ -91,6 +91,17 @@
             </button>
           </div>
           <p id="lyrics-track" class="lyrics-track muted">_aguardando faixa</p>
+          <label class="lyrics-sync-wrap" title="Ajuste fino de sincronia (karaoke)">
+            <span class="muted">sync</span>
+            <input
+              type="range"
+              id="lyrics-sync-offset"
+              min="-0.5"
+              max="0.5"
+              step="0.05"
+              value="0"
+            />
+          </label>
           <div id="lyrics-scroll" class="lyrics-scroll">
             <p class="lyrics-placeholder muted">Toque uma musica para ver a letra.</p>
           </div>
@@ -225,7 +236,7 @@
 
             <section id="panel-welcome" class="panel md-doc">
               <pre class="welcome-ascii" aria-hidden="true"><code>╔══════════════════════════════════════╗
-║  PROMPTUB v0.5.11  //  TERMINAL        ║
+║  PROMPTUB v0.5.12  //  TERMINAL        ║
 ║  player: HTML5 · stream: yt-dlp      ║
 ╚══════════════════════════════════════╝</code></pre>
               <h2 id="welcome-title">Bem-vindo</h2>

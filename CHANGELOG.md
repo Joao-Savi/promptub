@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.12] — 2026-08-05
+
+### Karaoke: precisao e velocidade
+- **Antes:** match LRCLIB fraco podia vencer; proxima faixa sem letra pronta; sync fixo
+- **Agora:** prefere legendas do video se match < 75%; prefetch na fila; slider sync ±0,5 s; timeout LRCLIB 3 s
+
+---
+
 ## [0.5.11] — 2026-08-05
 
 ### Letras: validacao e karaoke confiavel

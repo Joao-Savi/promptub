@@ -123,14 +123,16 @@ const PREWARM_AHEAD = 3;
 const VOLUME_STEP = 5;
 /** Atraso fino por fonte — legendas YouTube costumam adiantar vs o audio. */
 const LYRICS_LAG = { lrclib: 0.18, youtube: 0.55, plain: 0 };
+const LYRICS_OFFSET_KEY = "promptub-lyrics-offset";
 const LYRICS_CACHE_MAX = 24;
-const LYRICS_CACHE_VER = 3;
+const LYRICS_CACHE_VER = 4;
 const lyricsCache = new Map();
+const lyricsPrefetching = new Set();
 let lyricsSource = "lrclib";
 let lyricsSynced = true;
+let lyricsSyncOffset = 0;
 let lyricsLoading = false;
 let lyricsFetchVideoId = null;
-let lyricsRescaled = false;
 let streamRecoverInProgress = false;
 let streamStallTimer = null;
 let lastAudioTime = 0;
@@ -242,6 +244,70 @@ async function refreshTasteButtons() {
   }
 }
 
+function loadLyricsSyncOffset() {
+  try {
+    const raw = localStorage.getItem(LYRICS_OFFSET_KEY);
+    const n = raw == null ? 0 : Number(raw);
+    lyricsSyncOffset = Number.isFinite(n) ? Math.min(0.5, Math.max(-0.5, n)) : 0;
+  } catch (_) {
+    lyricsSyncOffset = 0;
+  }
+  const slider = $("lyrics-sync-offset");
+  if (slider) slider.value = String(lyricsSyncOffset);
+}
+
+function saveLyricsSyncOffset() {
+  try {
+    localStorage.setItem(LYRICS_OFFSET_KEY, String(lyricsSyncOffset));
+  } catch (_) {}
+}
+
+async function fetchLyricsForVideo(video) {
+  const lines = await tauriInvoke("fetch_lyrics", {
+    videoId: video.id,
+    title: video.title || "",
+    artist: video.uploader || "",
+  });
+  if (!isSyncedLyrics(lines)) return null;
+  return {
+    lines,
+    source: detectLyricsSource(lines),
+  };
+}
+
+function cacheLyrics(videoId, payload) {
+  lyricsCache.set(videoId, {
+    lines: payload.lines,
+    source: payload.source,
+    at: Date.now(),
+    ver: LYRICS_CACHE_VER,
+  });
+  pruneLyricsCache();
+}
+
+async function prefetchLyrics(video) {
+  if (!video?.id || lyricsCache.get(video.id)?.ver === LYRICS_CACHE_VER) return;
+  if (lyricsPrefetching.has(video.id)) return;
+  lyricsPrefetching.add(video.id);
+  try {
+    const payload = await fetchLyricsForVideo(video);
+    if (payload) cacheLyrics(video.id, payload);
+  } catch (_) {
+  } finally {
+    lyricsPrefetching.delete(video.id);
+  }
+}
+
+async function prefetchLyricsForQueue() {
+  try {
+    const q = await tauriInvoke("get_queue");
+    const upcoming = q.items.slice(q.current + 1, q.current + 1 + PREWARM_AHEAD);
+    for (const v of upcoming) {
+      void prefetchLyrics(v);
+    }
+  } catch (_) {}
+}
+
 function showNoLyrics(message = "sem letra sincronizada para esta faixa") {
   lyricLines = [];
   lyricLineEls = [];
@@ -346,25 +412,15 @@ async function loadLyrics(video) {
   if (trackLabel) trackLabel.textContent = video.title;
 
   try {
-    const lines = await tauriInvoke("fetch_lyrics", {
-      videoId: video.id,
-      title: video.title || "",
-      artist: video.uploader || "",
-    });
+    const payload = await fetchLyricsForVideo(video);
     if (token !== lyricsLoadToken) return;
-    if (!isSyncedLyrics(lines)) {
+    if (!payload) {
       showNoLyrics();
       return;
     }
-    lyricsSource = detectLyricsSource(lines);
-    lyricsCache.set(video.id, {
-      lines,
-      source: lyricsSource,
-      at: Date.now(),
-      ver: LYRICS_CACHE_VER,
-    });
-    pruneLyricsCache();
-    renderLyrics(lines);
+    lyricsSource = payload.source;
+    cacheLyrics(video.id, payload);
+    renderLyrics(payload.lines);
   } catch {
     if (token !== lyricsLoadToken) return;
     showNoLyrics();
@@ -383,74 +439,22 @@ function isPlainLyricsTiming(lines) {
   return Math.abs(lines[0].start) < 0.05;
 }
 
-function rescaleLyricsToDuration(lines, duration) {
-  if (!duration || !Number.isFinite(duration) || duration < 15 || !lines.length) return lines;
-  const intro = Math.min(45, Math.max(18, duration * 0.12));
-  const outro = 8;
-  const usable = Math.max(duration - intro - outro, lines.length * 2.5);
-  const step = usable / lines.length;
-  return lines.map((line, i) => ({
-    text: line.text,
-    start: intro + i * step,
-    end: intro + (i + 1) * step,
-    synced: false,
-  }));
-}
-
-function applyLyricsDurationScale() {
-  if (lyricsSynced || !lyricLines.length || !htmlAudio?.duration) return;
-  lyricLines = rescaleLyricsToDuration(lyricLines, htmlAudio.duration);
-  lyricsRescaled = true;
-  rebuildLyricElements();
-  lastLyricIdx = -1;
-  syncLyricsHighlight();
-}
-
-function rebuildLyricElements() {
-  const scroll = $("lyrics-scroll");
-  if (!scroll) return;
-  scroll.replaceChildren();
-  lyricLineEls = lyricLines.map((line, i) => {
-    const p = document.createElement("p");
-    p.className = "lyrics-line";
-    p.dataset.index = String(i);
-    p.textContent = line.text;
-    p.title = "Ir para este trecho";
-    p.onclick = () => {
-      if (htmlAudio && Number.isFinite(line.start)) {
-        htmlAudio.currentTime = line.start;
-      }
-    };
-    scroll.appendChild(p);
-    return p;
-  });
-}
-
 function lyricsEffectiveTime(t) {
   if (!lyricsSynced) return t;
-  const lag = LYRICS_LAG[lyricsSource] ?? 0.2;
+  const lag = (LYRICS_LAG[lyricsSource] ?? 0.2) - lyricsSyncOffset;
   return Math.max(0, t - lag);
 }
 
 function findActiveLyricIndex(t) {
-  if (!lyricLines.length) return -1;
+  if (!lyricLines.length || !lyricsSynced) return -1;
   const effective = lyricsEffectiveTime(t);
-
-  if (lyricsSynced) {
-    if (effective < lyricLines[0].start) return -1;
-    for (let i = lyricLines.length - 1; i >= 0; i--) {
-      const line = lyricLines[i];
-      const next = lyricLines[i + 1];
-      if (effective >= line.start && (!next || effective < next.start)) {
-        return i;
-      }
-    }
-    return -1;
-  }
-
-  if (!lyricsRescaled || effective < lyricLines[0].start) return -1;
+  if (effective < lyricLines[0].start) return -1;
   for (let i = lyricLines.length - 1; i >= 0; i--) {
-    if (effective >= lyricLines[i].start) return i;
+    const line = lyricLines[i];
+    const next = lyricLines[i + 1];
+    if (effective >= line.start && (!next || effective < next.start)) {
+      return i;
+    }
   }
   return -1;
 }
@@ -462,7 +466,6 @@ function renderLyrics(lines) {
   }
   lyricsSource = detectLyricsSource(lines);
   lyricsSynced = true;
-  lyricsRescaled = false;
 
   const scroll = $("lyrics-scroll");
   if (!scroll) return;
@@ -684,6 +687,7 @@ async function prewarmNextInQueue() {
         resolveStreamUrl(v).catch(() => {});
       }
     }
+    void prefetchLyricsForQueue();
   } catch (_) {}
 }
 
@@ -1357,7 +1361,6 @@ function setupAudioPlayer() {
 
   htmlAudio.addEventListener("loadedmetadata", () => {
     if (timeTotal) timeTotal.textContent = formatTime(htmlAudio.duration);
-    applyLyricsDurationScale();
   });
 
   htmlAudio.addEventListener("error", () => {
@@ -1393,6 +1396,13 @@ function setupAudioPlayer() {
 
 async function init() {
   setupAudioPlayer();
+  loadLyricsSyncOffset();
+  $("lyrics-sync-offset")?.addEventListener("input", (e) => {
+    lyricsSyncOffset = Number(e.target.value);
+    saveLyricsSyncOffset();
+    lastLyricIdx = -1;
+    syncLyricsHighlight();
+  });
   focusSearch();
 
   if (!isTauri()) {

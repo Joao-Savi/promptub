@@ -262,6 +262,22 @@ body::before {
   background: rgba(var(--accent-rgb), 0.06);
 }
 
+.lyrics-sync-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  padding: 0 0.1rem 0.25rem;
+}
+
+.lyrics-sync-wrap input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
 body.lyrics-karaoke #app::after {
   content: "";
   position: fixed;
