@@ -122,14 +122,20 @@ function streamCacheSet(id, url) {
 }
 const PREWARM_AHEAD = 3;
 const VOLUME_STEP = 5;
-/** Antecipa letra sincronizada (~meio segundo) para acompanhar a voz. */
-const LYRICS_LEAD_SYNCED = 0.5;
+/** Pequeno ajuste fino; 0 = timestamp exato do LRC/legenda. */
+const LYRICS_LEAD_SYNCED = 0;
 let lyricsSynced = true;
 let lyricsRescaled = false;
 let streamRecoverInProgress = false;
 let streamStallTimer = null;
 let lastAudioTime = 0;
 let lastAudioProgressAt = 0;
+let streamRecoverAttempts = 0;
+let lastStreamRecoverAt = 0;
+const STREAM_RECOVER_MIN_MS = 45000;
+const STREAM_STALL_WAIT_MS = 15000;
+const STREAM_GRACE_START_SEC = 10;
+const STREAM_MAX_RECOVER = 2;
 
 function adjustVolume(delta) {
   if (!htmlAudio || !volumeSlider) return;
@@ -529,7 +535,12 @@ async function resolveStreamUrl(video, force = false) {
 
 async function recoverStream() {
   if (!currentVideo || streamRecoverInProgress || !htmlAudio) return;
+  if (Date.now() - lastStreamRecoverAt < STREAM_RECOVER_MIN_MS) return;
+  if (streamRecoverAttempts >= STREAM_MAX_RECOVER) return;
+
   streamRecoverInProgress = true;
+  streamRecoverAttempts += 1;
+  lastStreamRecoverAt = Date.now();
   const pos = htmlAudio.currentTime || 0;
   const wasPlaying = !htmlAudio.paused;
   try {
@@ -539,7 +550,7 @@ async function recoverStream() {
     htmlAudio.src = url;
     htmlAudio.volume = Number(volumeSlider?.value ?? 100) / 100;
     const seek = () => {
-      if (pos > 0 && Number.isFinite(pos)) {
+      if (pos > 0.5 && Number.isFinite(pos)) {
         htmlAudio.currentTime = Math.min(pos, htmlAudio.duration || pos);
       }
     };
@@ -556,13 +567,31 @@ async function recoverStream() {
   }
 }
 
+function canAttemptStreamRecover() {
+  if (!htmlAudio || htmlAudio.paused || htmlAudio.ended || !currentVideo) return false;
+  if (streamRecoverInProgress) return false;
+  if (htmlAudio.currentTime < STREAM_GRACE_START_SEC) return false;
+  if (Date.now() - lastStreamRecoverAt < STREAM_RECOVER_MIN_MS) return false;
+  if (streamRecoverAttempts >= STREAM_MAX_RECOVER) return false;
+  return true;
+}
+
 function scheduleStreamRecover() {
+  if (!canAttemptStreamRecover()) return;
   if (streamStallTimer) clearTimeout(streamStallTimer);
   streamStallTimer = setTimeout(() => {
     streamStallTimer = null;
-    if (!htmlAudio || htmlAudio.paused || htmlAudio.ended || !currentVideo) return;
+    if (!canAttemptStreamRecover()) return;
+    if (htmlAudio && htmlAudio.readyState >= 3) return;
     void recoverStream();
-  }, 3500);
+  }, STREAM_STALL_WAIT_MS);
+}
+
+function cancelStreamRecover() {
+  if (streamStallTimer) {
+    clearTimeout(streamStallTimer);
+    streamStallTimer = null;
+  }
 }
 
 function watchPlaybackProgress() {
@@ -574,7 +603,7 @@ function watchPlaybackProgress() {
     lastAudioProgressAt = now;
     return;
   }
-  if (now - lastAudioProgressAt > 9000) {
+  if (now - lastAudioProgressAt > 20000) {
     lastAudioProgressAt = now;
     scheduleStreamRecover();
   }
@@ -603,6 +632,8 @@ async function streamAndPlay(video) {
   htmlAudio.volume = Number(volumeSlider?.value ?? 100) / 100;
   lastAudioTime = 0;
   lastAudioProgressAt = Date.now();
+  streamRecoverAttempts = 0;
+  cancelStreamRecover();
   await htmlAudio.play();
   isPlaying = true;
   updatePlayButton();
@@ -1225,11 +1256,23 @@ function setupAudioPlayer() {
     startLyricsSyncLoop();
   });
 
+  htmlAudio.addEventListener("playing", () => {
+    cancelStreamRecover();
+    lastAudioProgressAt = Date.now();
+    lastAudioTime = htmlAudio.currentTime;
+    if (statusEl?.textContent?.includes("reconectando")) {
+      setStatus("tocando · web");
+    }
+  });
+
   htmlAudio.addEventListener("pause", () => {
     isPlaying = false;
     updatePlayButton();
     stopLyricsSyncLoop();
     syncLyricsHighlight();
+    cancelStreamRecover();
+    lastAudioProgressAt = Date.now();
+    lastAudioTime = htmlAudio.currentTime;
   });
 
   htmlAudio.addEventListener("ended", () => {
@@ -1255,16 +1298,11 @@ function setupAudioPlayer() {
   htmlAudio.addEventListener("error", () => {
     isPlaying = false;
     updatePlayButton();
-    if (currentVideo) void recoverStream();
-    else setStatus("Erro ao tocar stream — tente outra faixa");
-  });
-
-  htmlAudio.addEventListener("stalled", () => {
-    if (!htmlAudio.paused && !htmlAudio.ended) scheduleStreamRecover();
-  });
-
-  htmlAudio.addEventListener("waiting", () => {
-    if (!htmlAudio.paused && !htmlAudio.ended) scheduleStreamRecover();
+    if (currentVideo && streamRecoverAttempts < STREAM_MAX_RECOVER) {
+      scheduleStreamRecover();
+    } else {
+      setStatus("Erro ao tocar stream — tente outra faixa");
+    }
   });
 
   progressSlider?.addEventListener("mousedown", () => {

@@ -18,10 +18,11 @@ SemVer: `MAJOR.MINOR.PATCH`
 - `README.md`
 - `index.html` (banner welcome)
 
-## Versão atual: **0.5.8**
+## Versão atual: **0.5.9**
 
 | Versão | Tipo | Resumo |
 |--------|------|--------|
+| **0.5.9** | PATCH | Fix loop de reconexao; sync letra sem adiantar |
 | **0.5.8** | PATCH | Limpeza automatica de cache (disco e temp) |
 | **0.5.7** | PATCH | Reconexao de stream; filtro de letras junk; lead 0,5 s |
 | **0.5.6** | PATCH | Sync karaoke: legendas YouTube + timestamps exatos |

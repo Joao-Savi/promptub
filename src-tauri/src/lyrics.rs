@@ -28,14 +28,14 @@ pub fn lookup_lyrics(cookies: &str, video_id: &str, title: &str, artist: &str) -
 
     let meta = parse_lyrics_meta(title, artist);
 
-    // LRCLIB sincronizado primeiro — evita legendas auto com lixo
-    if let Ok(lines) = fetch_lrclib(&meta, true) {
+    // Legendas deste video primeiro (sync com o audio); LRCLIB como fallback limpo
+    if let Ok(lines) = fetch_youtube_subs(cookies, id) {
         if let Ok(clean) = sanitize_lyrics(lines) {
             return Ok(clean);
         }
     }
 
-    if let Ok(lines) = fetch_youtube_subs(cookies, id) {
+    if let Ok(lines) = fetch_lrclib(&meta, true) {
         if let Ok(clean) = sanitize_lyrics(lines) {
             return Ok(clean);
         }

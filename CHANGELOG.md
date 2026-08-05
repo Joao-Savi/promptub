@@ -4,6 +4,14 @@ Histórico de versões com **como era antes** e **o que mudou**.
 
 ---
 
+## [0.5.9] — 2026-08-05
+
+### Stream e sync de letras
+- **Antes:** reconexao em loop no buffer; letra adiantada 0,5 s
+- **Agora:** reconecta so se travar 20+ s (nao ao pausar); legendas YouTube primeiro; timestamps exatos
+
+---
+
 ## [0.5.8] — 2026-08-05
 
 ### Limpeza automatica de cache
